@@ -22,6 +22,12 @@ import numpy as np
 from .filters import EMA, OneEuroFilter
 from .pose import JOINT_INDEX, JOINTS, MASS_VEC, PoseFrame
 
+# Split the body so the beat comes from the core and the melody from the limbs:
+# this is what makes "move one body part -> one thing moves" hold.
+LIMB_JOINTS = ["l_elbow", "r_elbow", "l_wrist", "r_wrist"]
+LIMB_IDX = np.array([JOINT_INDEX[j] for j in LIMB_JOINTS])
+CORE_IDX = np.array([i for i in range(len(JOINTS)) if i not in set(LIMB_IDX)])
+
 
 @dataclass
 class Features:
@@ -32,9 +38,11 @@ class Features:
     speed: np.ndarray                 # (J,)
     accel_mag: np.ndarray             # (J,)
     jerk_mag: np.ndarray              # (J,)
-    kinetic_energy: float             # scalar, mass-weighted
+    kinetic_energy: float             # scalar, mass-weighted (whole body)
     # mid lane
-    energy_env: float                 # smoothed energy envelope (oscillator food)
+    energy_env: float                 # smoothed energy envelope (whole body)
+    core_energy_env: float            # hips/legs/torso -> drives the beat
+    limb_energy_env: float            # arms/hands -> drives the melody/lead
     # slow lane (posture)
     com: np.ndarray                   # (3,)
     com_height: float                 # COM height above the feet (slow, posture)
@@ -55,6 +63,8 @@ class FeatureExtractor:
         self._pos_filt = OneEuroFilter(min_cutoff=2.0, beta=0.6, d_cutoff=2.0)
         # Envelope smoothing for the beat lane (a few hundred ms).
         self._env = EMA(tau=0.12)
+        self._core_env = EMA(tau=0.12)
+        self._limb_env = EMA(tau=0.12)
         self._com_height = EMA(tau=0.5)   # slow lane buffers harder
         self._openness = EMA(tau=0.5)
         # history
@@ -107,8 +117,11 @@ class FeatureExtractor:
         speed = np.linalg.norm(vel, axis=1)
         accel_mag = np.linalg.norm(accel, axis=1)
         jerk_mag = np.linalg.norm(jerk, axis=1)
-        kinetic = float(0.5 * (MASS_VEC * speed ** 2).sum())
+        ke_per = 0.5 * MASS_VEC * speed ** 2
+        kinetic = float(ke_per.sum())
         energy_env = float(self._env(kinetic, dt))
+        core_energy_env = float(self._core_env(float(ke_per[CORE_IDX].sum()), dt))
+        limb_energy_env = float(self._limb_env(float(ke_per[LIMB_IDX].sum()), dt))
 
         com = (pos * MASS_VEC[:, None]).sum(0)
         # Height above the feet: survives hip-centring, so a knee-flex bounce is
@@ -137,6 +150,7 @@ class FeatureExtractor:
         feats = Features(
             t=t, dt=dt, velocity=vel, speed=speed, accel_mag=accel_mag,
             jerk_mag=jerk_mag, kinetic_energy=kinetic, energy_env=energy_env,
+            core_energy_env=core_energy_env, limb_energy_env=limb_energy_env,
             com=com, com_height=com_height, bounce=bounce, openness=openness,
             symmetry=symmetry, asymmetry_lr=float(np.clip(asym, -1, 1)),
             verticality=verticality, events=events, present=True,
@@ -189,8 +203,8 @@ class FeatureExtractor:
         return Features(
             t=t, dt=dt, velocity=np.zeros((J, 3)), speed=np.zeros(J),
             accel_mag=np.zeros(J), jerk_mag=np.zeros(J), kinetic_energy=0.0,
-            energy_env=0.0, com=np.zeros(3), com_height=0.0, bounce=0.0,
-            openness=0.0,
+            energy_env=0.0, core_energy_env=0.0, limb_energy_env=0.0,
+            com=np.zeros(3), com_height=0.0, bounce=0.0, openness=0.0,
             symmetry=1.0, asymmetry_lr=0.0, verticality=0.0,
             events={"freeze": 1.0}, present=False,
         )

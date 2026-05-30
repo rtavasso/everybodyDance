@@ -68,10 +68,15 @@ class PoseFrame:
         return self.xyz[JOINT_INDEX[name]]
 
 
-def _normalise(xyz: np.ndarray) -> np.ndarray:
-    """Hip-centre, flip y up, scale by torso length."""
+def _normalise(xyz: np.ndarray, flip_y: bool = True) -> np.ndarray:
+    """Hip-centre, (optionally) flip y up, scale by torso length.
+
+    `flip_y=True` for image-space sources (MediaPipe/synthetic, y points down);
+    `flip_y=False` for sources already in a y-up world frame (BVH mocap).
+    """
     xyz = xyz.copy()
-    xyz[:, 1] = -xyz[:, 1]  # image y is down; make it up
+    if flip_y:
+        xyz[:, 1] = -xyz[:, 1]  # image y is down; make it up
     hip = 0.5 * (xyz[JOINT_INDEX["l_hip"]] + xyz[JOINT_INDEX["r_hip"]])
     shoulder = 0.5 * (xyz[JOINT_INDEX["l_shoulder"]] + xyz[JOINT_INDEX["r_shoulder"]])
     xyz = xyz - hip

@@ -57,10 +57,15 @@ class EntrainedClock:
                  steps_per_beat: int = 4,
                  fixed_hz: float = 2.0,
                  grace_s: float = 2.5,             # spin-up before rubato is allowed
-                 drive_ref: float = 0.02):         # raw modulation that counts as a beat
+                 drive_ref: float = 0.02,          # raw modulation that counts as a beat
+                 musical_lo_hz: float = 1.0,       # fold the felt tempo into this band
+                 musical_hi_hz: float = 2.3):
         self.tempo_mode = tempo_mode
         self.min_w = TWO_PI * min_hz
         self.max_w = TWO_PI * max_hz
+        self.mus_lo = TWO_PI * musical_lo_hz
+        self.mus_hi = TWO_PI * musical_hi_hz
+        self._mult = 1                            # tempo-octave multiplier (>=1)
         self.coupling = float(np.clip(coupling, 0.0, 1.0))
         self.mu = mu
         self.eps = eps
@@ -121,6 +126,8 @@ class EntrainedClock:
         (a clean fundamental), not raw kinetic energy (which peaks twice/cycle)."""
         dt = max(dt, 1e-3)
         self._t += dt
+        if not np.isfinite(drive_signal):     # guard against bad pose frames
+            drive_signal = self._env_mean
         # Remove slow DC so we entrain to *modulation*, and track its RMS.
         am = 1.0 - np.exp(-dt / 1.5)
         self._env_mean = (1 - am) * self._env_mean + am * drive_signal
@@ -133,19 +140,35 @@ class EntrainedClock:
 
         self._update_confidence(dt)
 
-        if self.tempo_mode == "fixed":
-            self.w = self.fixed_w
-            self._integrate_fixed(dt)
-            locked = True
-        elif not self._locked:
-            # Rubato fallback: drift slowly, ignore the noisy input.
-            self._integrate_rubato(dt)
-            locked = False
-        else:
-            self._integrate_adaptive(teach_n, dt)
-            locked = True
+        # Sub-step the integration: explicit Euler on the Hopf oscillator is
+        # unstable when dt is large (e.g. 12 fps pose data) or the state is big.
+        # Small internal steps keep it bounded; we also clamp the state below.
+        n = max(1, int(np.ceil(dt / 0.034)))
+        sdt = dt / n
+        for _ in range(n):
+            if self.tempo_mode == "fixed":
+                self.w = self.fixed_w
+                self._integrate_fixed(sdt)
+                locked = True
+            elif not self._locked:
+                self._integrate_rubato(sdt)
+                locked = False
+            else:
+                self._integrate_adaptive(teach_n, sdt)
+                locked = True
+            self._sanitize()
 
         return self._emit(locked, dt)
+
+    def _sanitize(self):
+        """Keep the oscillator state finite and bounded (robust to noisy input)."""
+        R = 3.0 * np.sqrt(self.mu)
+        if not (np.isfinite(self.x) and np.isfinite(self.y)):
+            self.x, self.y = np.sqrt(self.mu), 0.0
+        self.x = float(np.clip(self.x, -R, R))
+        self.y = float(np.clip(self.y, -R, R))
+        if not np.isfinite(self.phase):
+            self.phase = 0.0
 
     # --- integrators -------------------------------------------------------
 
@@ -189,15 +212,27 @@ class EntrainedClock:
     # --- emit --------------------------------------------------------------
 
     def _emit(self, locked: bool, dt: float) -> ClockState:
-        beat = self.phase < self._last_beat_phase  # wrapped past 0 => new beat
-        self._last_beat_phase = self.phase
-        step = int(self.phase / TWO_PI * self.steps_per_beat)
+        w = self.w if self.tempo_mode != "fixed" else self.fixed_w
+        # Tempo-octave folding: human periodicity is often a slow sway (~0.6 Hz).
+        # Express the felt tempo at an integer multiple of the body's fundamental
+        # so it lands in a musical band while staying phase-locked to the body.
+        mult = self._mult
+        while w * mult < self.mus_lo and mult < 4:
+            mult *= 2
+        while w * mult > self.mus_hi and mult > 1:
+            mult //= 2
+        self._mult = mult
+
+        # Musical phase runs at mult beats per body cycle (integer => clean wraps).
+        mphase = (self.phase * mult) % TWO_PI
+        beat = mphase < self._last_beat_phase       # wrapped past 0 => new beat
+        self._last_beat_phase = mphase
+        step = int(mphase / TWO_PI * self.steps_per_beat)
         step_advanced = step != self._step
         self._step = step
-        w = self.w if self.tempo_mode != "fixed" else self.fixed_w
-        tempo_hz = w / TWO_PI
+        tempo_hz = w * mult / TWO_PI
         return ClockState(
-            phase=self.phase,
+            phase=mphase,
             tempo_hz=tempo_hz,
             bpm=tempo_hz * 60.0,
             confidence=self._conf,

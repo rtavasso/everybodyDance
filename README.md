@@ -184,6 +184,38 @@ run.py               CLI
 tests/test_core.py   headless proofs (entrainment, scale-safety, coupling dial)
 ```
 
+## Running on real data
+
+The instrument has been iterated against real bodies, not just the synthetic
+dancer. See `WORKLOG.md` for the full debugging trail.
+
+```bash
+bash scripts/get_data.sh          # LAFAN1 dance mocap + MediaPipe model + clips
+
+# Pose estimation on a real video -> keypoints:
+python tools/extract_pose.py data/videos/bolt-detection.mp4 -o data/poses/bolt.npz
+
+# Run the instrument across dancers: per-person OUTPUT signature, a distinctness
+# matrix, and a rendered WAV per dancer (so musicality can be heard):
+python -m tools.run_dataset 'data/bvh/dance*.bvh' --max-seconds 50      # mocap
+python -m tools.run_dataset 'data/poses/*.npz' --kind npz               # pose-est
+
+# Specificity acceptance probes (stop -> stops; one body part -> one thing):
+python -m tools.probe_specificity
+```
+
+Real-data modules: `everybody_dance/sources.py` (BVH + npz pose sources),
+`tools/bvh.py` (BVH parser + FK), `tools/extract_pose.py` (MediaPipe Tasks API),
+`tools/synth.py` (events → WAV), `tools/run_dataset.py`, `tools/probe_specificity.py`.
+
+What the iteration established (all verified, see `tests/test_specificity.py`):
+- **distinct per person** — different dancers land in different palettes/scales,
+  tempos and densities; the music is calibrated to each body;
+- **musical** — in-scale throughout, tempo octave-folded into a musical band,
+  real dynamic range in the rendered audio;
+- **specific** — stop moving and the music stops (a held breath chord remains);
+  move one body part and one thing moves (beat ← core, melody ← limbs).
+
 ## Status & next steps
 
 This is the hand-built prototype the brief calls for: one Python process, runs

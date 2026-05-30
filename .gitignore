@@ -7,3 +7,9 @@ venv/
 *.json.profile
 profiles/
 .DS_Store
+
+# large binaries / generated artifacts (fetch via scripts/get_data.sh)
+data/
+models/
+out/
+*.wav

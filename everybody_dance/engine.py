@@ -92,15 +92,16 @@ class Engine:
 
     def _process(self, frame, calibrator: Optional[Calibrator]) -> Optional[FrameTrace]:
         feats = self.features.update(frame)
-        eff = self.laban.update(feats, feats.dt)
+        drivers = self.laban.update(feats, feats.dt)
         # The clock entrains to the vertical COM bounce -- a clean fundamental.
         clk = self.clock.update(float(feats.bounce), feats.dt)
 
         if calibrator is not None:
-            calibrator.observe(feats, eff, clk.tempo_hz)
+            calibrator.observe(feats, drivers, clk.tempo_hz)
             return None
 
-        nf = self.normalizer(feats, eff)
+        eff = self.normalizer.effort(drivers)
+        nf = self.normalizer.features(feats, eff)
         events = self.readout.step(feats, eff, nf, clk)
         self._emit(events, feats.t)
         self._flush_offs(feats.t)
@@ -114,9 +115,11 @@ class Engine:
 
     def _emit(self, events: List[MusicEvent], t: float) -> None:
         for ev in events:
+            ev.t = t
             self.backend.send(ev)
             if ev.kind == "note_on" and ev.dur:
-                off = MusicEvent("note_off", ev.channel, ev.a, 0, tag=ev.tag)
+                off = MusicEvent("note_off", ev.channel, ev.a, 0, t=t + ev.dur,
+                                 tag=ev.tag)
                 heapq.heappush(self._offs, (t + ev.dur, _Seq.next(), off))
 
     def _flush_offs(self, t: float) -> None:

@@ -117,6 +117,15 @@ class Substrate:
         pc = self._scale[degree % n]
         return self.cfg.tonic + 12 * octv + pc
 
+    def fold_into_range(self, note: int, lo: int, hi: int) -> int:
+        """Shift `note` by whole octaves into [lo, hi]; preserves scale membership
+        (unlike a hard clip, which can land off-scale)."""
+        while note < lo:
+            note += 12
+        while note > hi:
+            note -= 12
+        return int(np.clip(note, lo, hi))
+
     def snap(self, value01: float, role: TrackRole,
              chord_weighted: bool = True) -> int:
         """Map value in [0,1] to a MIDI note within the role's register,
@@ -165,18 +174,46 @@ class Substrate:
 
 
 def biased_config(signature: dict | None) -> SubstrateConfig:
-    """Bias the substrate from a person's movement signature (palette + mode)."""
+    """Bias the substrate from a person's movement signature.
+
+    Drives palette, scale, register (tonic) and per-role density so different
+    movers don't just differ numerically -- they land in different musical
+    worlds. Thresholds are set against observed real-mocap scales.
+    """
     cfg = SubstrateConfig.default()
     if not signature:
         return cfg
-    jerk = signature.get("jerk_mean", 0.0)
-    energy = signature.get("energy_mean", 0.0)
-    # Sharp / percussive movers -> rhythmic staccato; flowing / slow -> ambient.
-    if jerk > 6.0 or energy > 0.4:
-        cfg.palette = "rhythmic"
-        cfg.scale = "dorian"
-    elif jerk < 2.0 and energy < 0.15:
+    weight = signature.get("weight_mean", signature.get("energy_mean", 0.5))
+    jerk = signature.get("jerk_mean", 100.0)
+
+    # 1) palette from how energetic / sharp the mover is
+    if weight < 0.4 and jerk < 150:
         cfg.palette = "ambient"
-        cfg.scale = "major_pentatonic"
+    elif weight > 0.85 or jerk > 200:
+        cfg.palette = "rhythmic"
+    else:
+        cfg.palette = "neutral"
+
+    # 2) scale from palette, with a secondary split on jerk (sharp vs smooth)
+    smooth = jerk < 120
+    cfg.scale = {
+        ("ambient", True): "major_pentatonic", ("ambient", False): "lydian",
+        ("neutral", True): "minor", ("neutral", False): "dorian",
+        ("rhythmic", True): "dorian", ("rhythmic", False): "phrygian",
+    }[(cfg.palette, smooth)]
+
+    # 3) register: gentle movers sit higher/brighter, energetic ones lower/darker
+    cfg.tonic = {"ambient": 60, "neutral": 57, "rhythmic": 52}[cfg.palette]
+
+    # 4) density bounds + articulation from energy
+    if cfg.palette == "ambient":
+        cfg.roles["drums"].max_density = 6
+        cfg.roles["lead"].max_density = 4
         cfg.roles["chord"].legato = True
+    elif cfg.palette == "rhythmic":
+        cfg.roles["drums"].max_density = 16
+        cfg.roles["lead"].max_density = 10
+    else:
+        cfg.roles["drums"].max_density = 10
+        cfg.roles["lead"].max_density = 7
     return cfg

@@ -37,7 +37,9 @@ CC_PAN = 10          # stereo placement
 @dataclass
 class NormFeatures:
     """Personalised, range-normalised drivers in [0,1]."""
-    energy: float
+    energy: float        # whole-body (global dynamics)
+    core_energy: float   # hips/legs/torso (drums, bass -- the beat)
+    limb_energy: float   # arms/hands (lead -- the melody)
     openness: float
     com_height: float
     weight: float        # from Effort, passed through normaliser if desired
@@ -104,22 +106,23 @@ class Readout:
             (self._beat_count % cfg.beats_per_bar) * cfg.steps_per_beat)
         step %= steps
 
-        # Drums: kick pattern density from energy + Weight; hats from energy.
-        kick = self.sub.pattern("drums", 0.25 + 0.5 * nf.energy)
-        hat = self.sub.pattern("drums", 0.4 + 0.6 * nf.energy)
+        # Drums come from the CORE (bounce/steps), not total energy -- so a fast
+        # arm alone won't manufacture a beat. Density scales from zero (no floor).
+        kick = self.sub.pattern("drums", 0.7 * nf.core_energy)
+        hat = self.sub.pattern("drums", 0.2 + 0.7 * nf.core_energy)
         if kick[step] and self.rng.random() < 0.7 + 0.3 * eff.weight:
             vel = int(np.clip(60 + 60 * eff.weight, 1, 127))
             out.append(MusicEvent("note_on", 10, 36, vel, dur=0.08, tag="drums.kick"))
-        if hat[step] and self.rng.random() < 0.4 + 0.5 * nf.energy:
+        if hat[step] and self.rng.random() < 0.4 + 0.5 * nf.core_energy:
             vel = int(np.clip(40 + 50 * eff.time, 1, 127))
             out.append(MusicEvent("note_on", 10, 42, vel, dur=0.05, tag="drums.hat"))
 
-        # Bass: root of the field on strong steps, density from energy.
-        bass = self.sub.pattern("bass", 0.3 + 0.5 * nf.energy)
+        # Bass: root of the field on strong steps, density from core energy.
+        bass = self.sub.pattern("bass", 0.6 * nf.core_energy)
         if bass[step]:
             role = cfg.roles["bass"]
             note = self.sub.degree_to_midi(self.sub.chord_root_degree, octave=-1)
-            note = int(np.clip(note, role.lo, role.hi))
+            note = self.sub.fold_into_range(note, role.lo, role.hi)
             vel = int(np.clip(55 + 55 * eff.weight, 1, 127))
             dur = 60.0 / max(clk.bpm, 1) * (0.9 if eff.flow > 0.5 else 0.4)
             out.append(MusicEvent("note_on", role.channel, note, vel,
@@ -132,9 +135,10 @@ class Readout:
 
         # Probability of a lead note this beat-step, gated by energy.
         # Space (directness) raises melodic activity; Flow lengthens notes.
+        # Lead comes from the LIMBS (arms/hands), so moving an arm moves the melody.
         fire = False
         if clk.step_advanced:
-            p = 0.15 + 0.6 * nf.energy * (0.5 + 0.5 * eff.space)
+            p = 0.1 + 0.7 * nf.limb_energy * (0.5 + 0.5 * eff.space)
             fire = self.rng.random() < p
         # Events always punch through (tight, off kinematics).
         thrust = f.events.get("thrust", 0.0)
@@ -188,7 +192,7 @@ class Readout:
         for k, deg in enumerate(tones):
             octave = base_oct + int(k * spread)
             note = self.sub.degree_to_midi(deg, octave=octave)
-            note = int(np.clip(note, role.lo, role.hi))
+            note = self.sub.fold_into_range(note, role.lo, role.hi)
             notes.append(note)
         vel = int(np.clip(35 + 45 * eff.weight, 1, 100))
         for note in sorted(set(notes)):
@@ -211,8 +215,8 @@ class Readout:
             role = self.sub.cfg.roles["chord"]
             root = self.sub.chord_root_degree
             sus = [root, root + 1, root + 4]  # sus2-ish colour
-            notes = sorted({int(np.clip(self.sub.degree_to_midi(d, octave=k),
-                                        role.lo, role.hi))
+            notes = sorted({self.sub.fold_into_range(self.sub.degree_to_midi(d, octave=k),
+                                                     role.lo, role.hi)
                             for k, d in enumerate(sus)})
             for n in notes:
                 out.append(MusicEvent("note_on", role.channel, n, 45, tag="chord.sus"))
