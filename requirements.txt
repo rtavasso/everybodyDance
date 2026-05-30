@@ -1,0 +1,12 @@
+# Core (everything headless: features, oscillator, substrate, readout, tests)
+numpy>=1.24
+
+# --- Real-time stack (install for webcam in / MIDI-OSC out) ---------------
+# Uncomment, or `pip install -r requirements-realtime.txt`.
+# mediapipe>=0.10        # pose estimation from a webcam
+# opencv-python>=4.8      # camera capture
+# python-rtmidi>=1.5      # MIDI out (virtual port into Ableton / any DAW)
+# python-osc>=1.8         # OSC out (alternative to MIDI)
+
+# --- Dev -----------------------------------------------------------------
+# pytest>=7

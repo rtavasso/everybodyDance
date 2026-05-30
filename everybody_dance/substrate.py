@@ -1,0 +1,182 @@
+"""Coherence substrate -- musicality by construction.
+
+This is the safety net that makes "most movement sounds musical" true
+regardless of input. The body drives *readout indices and modulation lanes*;
+the substrate keeps everything in bounds:
+
+  * a fixed scale / mode plus a slowly-moving harmonic field
+  * per-track roles (bass / chord / lead / drums) with register & density bounds
+  * euclidean rhythm patterns on a quantized grid -- sensible across the entire
+    input range, so a feature can drive "pulses" raw and never make garbage
+  * pitch snapped to the active scale, chord tones weighted
+
+No looping is required: the entrained clock provides meter and phrase, so the
+output has structure without literal periodicity.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Dict, List, Tuple
+
+import numpy as np
+
+# Scale degrees as semitone offsets from the tonic.
+SCALES: Dict[str, List[int]] = {
+    "major": [0, 2, 4, 5, 7, 9, 11],
+    "minor": [0, 2, 3, 5, 7, 8, 10],
+    "dorian": [0, 2, 3, 5, 7, 9, 10],
+    "minor_pentatonic": [0, 3, 5, 7, 10],
+    "major_pentatonic": [0, 2, 4, 7, 9],
+    "lydian": [0, 2, 4, 6, 7, 9, 11],
+    "phrygian": [0, 1, 3, 5, 7, 8, 10],
+}
+
+# A gentle, mostly-diatonic harmonic field: scale-degree roots (0-based) that
+# the field drifts across at phrase rate. Indices into the active scale.
+DEFAULT_FIELD = [0, 5, 3, 4]  # i - vi - iv - v flavour in minor
+
+
+def euclidean(pulses: int, steps: int) -> List[int]:
+    """Bjorklund's algorithm: distribute `pulses` as evenly as possible over
+    `steps`. Returns a list of 0/1 of length `steps`."""
+    pulses = int(np.clip(pulses, 0, steps))
+    if pulses <= 0:
+        return [0] * steps
+    if pulses >= steps:
+        return [1] * steps
+    # Downbeat-aligned even distribution: a pulse falls on step 0.
+    return [1 if (i * pulses) % steps < pulses else 0 for i in range(steps)]
+
+
+@dataclass
+class TrackRole:
+    name: str
+    channel: int
+    lo: int                       # lowest MIDI note
+    hi: int                       # highest MIDI note
+    max_density: int              # max euclidean pulses / bar
+    legato: bool = False
+
+
+@dataclass
+class SubstrateConfig:
+    tonic: int = 57               # A3
+    scale: str = "minor"
+    harmonic_field: List[int] = field(default_factory=lambda: list(DEFAULT_FIELD))
+    steps_per_beat: int = 4
+    beats_per_bar: int = 4
+    bars_per_phrase: int = 4
+    palette: str = "neutral"      # neutral | ambient | rhythmic (signature bias)
+    roles: Dict[str, TrackRole] = field(default_factory=dict)
+
+    @staticmethod
+    def default() -> "SubstrateConfig":
+        cfg = SubstrateConfig()
+        cfg.roles = {
+            "bass":  TrackRole("bass", channel=1, lo=33, hi=50, max_density=4),
+            "chord": TrackRole("chord", channel=2, lo=52, hi=72, max_density=4,
+                               legato=True),
+            "lead":  TrackRole("lead", channel=3, lo=64, hi=88, max_density=8),
+            "drums": TrackRole("drums", channel=10, lo=35, hi=51, max_density=16),
+        }
+        return cfg
+
+
+class Substrate:
+    """Holds harmonic state and snaps continuous values into musical ones."""
+
+    def __init__(self, cfg: SubstrateConfig):
+        self.cfg = cfg
+        self._scale = SCALES[cfg.scale]
+        self._phrase_pos = 0          # advances on phrase boundaries
+        self._field_idx = 0
+
+    # -- harmony -----------------------------------------------------------
+
+    def advance_phrase(self) -> None:
+        self._phrase_pos += 1
+        self._field_idx = self._phrase_pos % len(self.cfg.harmonic_field)
+
+    @property
+    def chord_root_degree(self) -> int:
+        return self.cfg.harmonic_field[self._field_idx]
+
+    def chord_tones(self) -> List[int]:
+        """Triad (1-3-5) built on the current field root, as scale degrees."""
+        root = self.chord_root_degree
+        return [root, root + 2, root + 4]
+
+    def scale_size(self) -> int:
+        return len(self._scale)
+
+    def degree_to_midi(self, degree: int, octave: int = 0) -> int:
+        """Map an (unbounded) scale degree to a MIDI note number."""
+        n = len(self._scale)
+        octv = degree // n + octave
+        pc = self._scale[degree % n]
+        return self.cfg.tonic + 12 * octv + pc
+
+    def snap(self, value01: float, role: TrackRole,
+             chord_weighted: bool = True) -> int:
+        """Map value in [0,1] to a MIDI note within the role's register,
+        snapped to the active scale and (optionally) weighted to chord tones."""
+        value01 = float(np.clip(value01, 0.0, 1.0))
+        # Candidate notes in range, snapped to scale.
+        candidates = []
+        n = len(self._scale)
+        deg = 0
+        # Walk degrees spanning the register.
+        start_oct = (role.lo - self.cfg.tonic) // 12 - 1
+        end_oct = (role.hi - self.cfg.tonic) // 12 + 1
+        for octv in range(start_oct, end_oct + 1):
+            for d in range(n):
+                note = self.cfg.tonic + 12 * octv + self._scale[d]
+                if role.lo <= note <= role.hi:
+                    candidates.append((d + octv * n, note))
+        if not candidates:
+            return int(np.clip(role.lo, 0, 127))
+        candidates.sort(key=lambda c: c[1])
+        notes = [c[1] for c in candidates]
+        degs = [c[0] for c in candidates]
+        # pick by position
+        idx = int(round(value01 * (len(notes) - 1)))
+        if chord_weighted:
+            idx = self._nudge_to_chord(idx, degs)
+        return int(notes[idx])
+
+    def _nudge_to_chord(self, idx: int, degs: List[int]) -> int:
+        chord = set(self.chord_tones())
+        n = len(self._scale)
+        # search outward for the nearest chord tone
+        for off in range(0, 4):
+            for s in (idx - off, idx + off):
+                if 0 <= s < len(degs) and (degs[s] % n) in {c % n for c in chord}:
+                    return s
+        return idx
+
+    # -- rhythm ------------------------------------------------------------
+
+    def pattern(self, role_name: str, density01: float) -> List[int]:
+        role = self.cfg.roles[role_name]
+        steps = self.cfg.steps_per_beat * self.cfg.beats_per_bar
+        pulses = int(round(np.clip(density01, 0, 1) * role.max_density))
+        return euclidean(pulses, steps)
+
+
+def biased_config(signature: dict | None) -> SubstrateConfig:
+    """Bias the substrate from a person's movement signature (palette + mode)."""
+    cfg = SubstrateConfig.default()
+    if not signature:
+        return cfg
+    jerk = signature.get("jerk_mean", 0.0)
+    energy = signature.get("energy_mean", 0.0)
+    # Sharp / percussive movers -> rhythmic staccato; flowing / slow -> ambient.
+    if jerk > 6.0 or energy > 0.4:
+        cfg.palette = "rhythmic"
+        cfg.scale = "dorian"
+    elif jerk < 2.0 and energy < 0.15:
+        cfg.palette = "ambient"
+        cfg.scale = "major_pentatonic"
+        cfg.roles["chord"].legato = True
+    return cfg

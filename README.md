@@ -1,0 +1,194 @@
+# everybodyDance — music that dances to you
+
+An interactive instrument that watches a body and **generates music tied to how
+that person moves** — specific to them, alive, coherent. Not a sonification toy,
+not a backing track to dance over. A partner.
+
+Body tracking in, music out, where the music is audibly *caused* by the movement
+and feels musical the whole time. Timbres are out of scope: the output is
+MIDI/OSC into your own synths (fixed timbres). This is about **structure,
+rhythm, dynamics, and modulation.**
+
+```
+body
+  → pose estimation
+  → features (by timescale) + Laban Effort
+  → entrained clock  +  event/CC streams
+  → coherence substrate  (keeps everything musical)
+  → MIDI / OSC
+  → your synths (fixed timbres)
+```
+
+---
+
+## The core idea, and how it's resolved here
+
+Everything hard collapses into one tension — **reactivity** (map body straight
+to sound: legible but dead) vs **musicality** (let the music run its own
+structure: good, but the coupling is gone). The resolution, implemented here:
+
+> **Decompose movement by timescale, and route each timescale to the musical
+> layer that moves at that speed.** Fast motion drives fast musical things; slow
+> posture drives slow harmonic things. Each lane is *rate-matched*, so the
+> connection reads as tight everywhere.
+
+| timescale | feature | module | musical target |
+|-----------|---------|--------|----------------|
+| fast (ms) | velocity / accel / jerk / kinetic energy | `features.py` | dynamics, accent, filter cutoff, density |
+| mid (beat) | vertical COM bounce → periodicity | `oscillator.py` | **the clock locks to this** |
+| slow (phrase) | posture: COM height, openness, symmetry | `features.py` | harmony, register, palette |
+| events | stomp, thrust, reversal, freeze | `features.py` | hits, fills, transitions |
+| signature | the statistics of how you move | `personalization.py` | the basis for personalization |
+
+**Laban Effort is the intermediate representation** (`laban.py`). We don't map
+joints to notes; we map kinematics → Effort (Weight, Time, Space, Flow) → music,
+because Effort is *perceptually meaningful* — a human watching would route it the
+same way, so the coupling reads as natural for free.
+
+- **Weight** → dynamics + bass presence
+- **Time** (sudden/sustained) → articulation, attack
+- **Space** (direct/indirect) → harmonic directness vs delay send
+- **Flow** (bound/free) → staccato vs legato, reverb send
+
+**The heart — entrain the clock to the body** (`oscillator.py`). An
+adaptive-frequency (Hopf) oscillator with dynamic Hebbian frequency learning
+(Righetti / Buchli / Ijspeert) is fed the movement-energy carrier (the vertical
+COM bounce, which has a clean fundamental — raw kinetic energy peaks *twice* per
+bounce). It learns your tempo and locks phase to it. One dial is the whole feel:
+
+> **`--coupling` (0…1)** — low = music follows you tightly (can feel servile);
+> high = the oscillator keeps its own groove you push against (dancing with a
+> partner who has their own body).
+
+**Coherence substrate — musicality by construction** (`substrate.py`). Fixed
+scale/mode + a slowly-moving harmonic field; per-track roles with register &
+density bounds; euclidean rhythms on a quantized grid; pitch snapped to the
+active scale with chord-tone weighting. The body drives *readout indices and
+modulation lanes*; the substrate keeps it in bounds. No looping — the entrained
+clock provides meter and phrase without literal periodicity.
+
+**Personalization is required, not a feature** (`personalization.py`). A ~20 s
+free-movement calibration captures your range, characteristic tempo, energy
+distribution, and Laban signature. Then we (1) normalize so *your* full range
+maps to the full musical range — this alone makes it feel alive for everyone —
+and (2) bias the substrate from your signature (flowing/slow → ambient legato;
+sharp/percussive → rhythmic staccato).
+
+### The open fork, resolved
+
+> *Does tempo follow the body, or stay in a fixed band while the body drives
+> only feel and density?*
+
+Both are built; pick with `--tempo`:
+
+- **`--tempo entrain`** (default) — body-led tempo via the adaptive oscillator.
+  More truly "dances to you." All the risk lives here (entrainment robustness),
+  so it ships with **hysteresis + a rubato/ambient fallback**: when there's no
+  clear beat, it stops chasing noise and drifts instead of locking to garbage.
+- **`--tempo fixed`** — rock-solid musical clock; the body drives feel, density,
+  harmony and dynamics, but not tempo. Looser connection, zero entrainment risk.
+
+---
+
+## Install & run
+
+```bash
+pip install -r requirements.txt          # core (numpy) — enough for headless + tests
+
+# Headless self-test on a synthetic dancer. No camera, no MIDI. Prints a
+# coupling report you can read in a terminal:
+python run.py --source synthetic --backend log --demo
+
+# Run the tests (proves entrainment, scale-safety, stillness, the coupling dial):
+pip install pytest && python -m pytest -q
+```
+
+### Real use: webcam → Ableton (or any DAW)
+
+```bash
+pip install -r requirements-realtime.txt   # mediapipe, opencv, rtmidi, osc
+
+# Calibrate ~20 s of free movement, then play. Body-led tempo, mid coupling:
+python run.py --source webcam --backend midi --tempo entrain --coupling 0.4
+
+# Save / reuse a personal profile (skips calibration next time):
+python run.py --source webcam --backend midi --profile me.json
+
+# Rock-solid fixed tempo instead:
+python run.py --source webcam --backend midi --tempo fixed --fixed-hz 2.0
+
+# OSC instead of MIDI:
+python run.py --source webcam --backend osc --osc-host 127.0.0.1 --osc-port 9000
+```
+
+`--backend midi` opens a **virtual MIDI port** named `everybodyDance`. In
+Ableton/your DAW, enable it as an input and route the channels below to four
+instruments (fixed timbres are yours to choose).
+
+### MIDI / OSC map
+
+| channel | role | notes | key CCs |
+|---------|------|-------|---------|
+| 1 | **bass** | field root, –1 oct | — |
+| 2 | **chord / pad** | triad voicing, openness → spread | — |
+| 3 | **lead** | scale-snapped, events punch through | CC10 pan ← L/R asymmetry |
+| 10 | **drums** | 36 kick · 42 hat · 41/41 toms (fills) | — |
+| (global) | modulation | — | CC11 dynamics ← energy · CC74 cutoff ← energy+Weight · CC91 reverb ← Flow · CC93 delay ← Space |
+
+OSC messages: `/note [channel, note, velocity]` and `/cc [channel, num, value]`.
+
+---
+
+## Mappings worth stealing (implemented)
+
+- vertical COM bounce → beat phase / kick (`oscillator` + `readout`)
+- kinetic energy → density + dynamics + cutoff
+- limb extension / openness → voicing spread, register
+- jerk / direction reversal → accent, fill, transition
+- L/R asymmetry → stereo placement (CC10) + call/response hook
+- **stillness → a held / suspended chord, a breath** — never silence. Systems
+  that only respond to motion punish stillness, and stillness is half of dance.
+
+## Where it lives or dies (and what's done about it)
+
+1. **Tempo-entrainment robustness.** Human periodicity is fuzzy and shifts.
+   Handled with confidence + hysteresis and a graceful non-periodic fallback to
+   rubato/ambient (`oscillator.EntrainedClock`).
+2. **Reactive-vs-structural blend, per track.** Drums & bass are quantized to
+   the entrained grid (musical, slightly laggy); lead accents and FX run direct
+   off kinematics (tight). The split is in `readout.Readout`.
+3. **Stillness handling.** Easy to forget; ruins the feel. Explicitly modeled.
+
+## Latency
+
+- One-euro filter (`filters.py`) for low-latency interactive smoothing.
+- Smoothing allocated by timescale — fast lane near-raw, slow lane buffers.
+- `EntrainedClock.predict_phase()` lets you fire percussion slightly ahead to
+  eat output latency (`--coupling` aside, see `EngineConfig.latency_compensation_s`).
+
+## Project layout
+
+```
+everybody_dance/
+  pose.py            pose sources (synthetic dancer + mediapipe webcam)
+  filters.py         one-euro filter, EMA
+  features.py        timescale feature stack + movement signature
+  laban.py           kinematics → Laban Effort
+  oscillator.py      adaptive-frequency clock + rubato fallback  ← the heart
+  substrate.py       scales, euclidean rhythm, harmonic field, roles
+  readout.py         features + phase → MIDI/CC events
+  personalization.py calibration, normalization, signature bias
+  output.py          MIDI / OSC / log backends
+  engine.py          the one process tying it together
+run.py               CLI
+tests/test_core.py   headless proofs (entrainment, scale-safety, coupling dial)
+```
+
+## Status & next steps
+
+This is the hand-built prototype the brief calls for: one Python process, runs
+headless so the only question that matters early — *does the coupling read?* —
+is answered fast (and in CI). Deferred on purpose: the learned per-person
+embedding / decoder (the heavy path), depth-camera 3D, and a live GUI for the
+coupling dial. The adaptive Hopf oscillator has a small steady-state tempo bias
+(~3%); fine for feel, tunable if you want metronomic accuracy.
