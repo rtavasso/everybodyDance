@@ -100,6 +100,40 @@ def load_bvh_source(path: str, max_seconds: Optional[float] = None,
                            name=os.path.splitext(os.path.basename(path))[0])
 
 
+# "Dance with Melody" dataset (Music-to-dance-motion-synthesis): 23-joint Kinect
+# skeleton. Index layout decoded from bone topology + height + motion (validated
+# anatomically: left/right consistent, head>shoulders>hips>knees>ankles).
+MELODY_MAP = {
+    "nose": 0,
+    "l_shoulder": 3, "r_shoulder": 12,
+    "l_elbow": 4, "r_elbow": 13,
+    "l_wrist": 6, "r_wrist": 15,
+    "l_hip": 7, "r_hip": 16,
+    "l_knee": 8, "r_knee": 17,
+    "l_ankle": 9, "r_ankle": 18,
+}
+
+
+def load_dance_skeleton_source(path: str, fps: float = 25.0,
+                               config: Optional[str] = None,
+                               realtime: bool = False) -> ArrayPoseSource:
+    """Load a 'Dance with Melody' skeletons.json (3D Kinect pose of a dancer)."""
+    import json
+    import os
+    with open(path) as fh:
+        d = json.load(fh)
+    sk = np.asarray(d["skeletons"], dtype=float)        # (T, 23, 3)
+    ce = np.asarray(d["center"], dtype=float)           # (T, 3)
+    world = ce[:, None, :] + sk                         # absolute, y-up
+    if config and os.path.exists(config):
+        c = json.load(open(config))
+        world = world[c.get("start_position", 0):c.get("end_position", len(world))]
+    sel = [MELODY_MAP[j] for j in JOINTS]
+    xyz = world[:, sel, :]
+    name = os.path.basename(os.path.dirname(path)) or os.path.basename(path)
+    return ArrayPoseSource(xyz, fps=fps, flip_y=False, realtime=realtime, name=name)
+
+
 def load_npz_source(path: str, min_visibility: float = 0.3,
                     realtime: bool = False) -> ArrayPoseSource:
     """Load MediaPipe keypoints (.npz from tools/extract_pose.py)."""

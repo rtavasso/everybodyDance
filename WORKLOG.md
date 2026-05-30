@@ -66,6 +66,36 @@ Status legend: ✅ working · ⚠️ partial · ❌ broken · ⏳ in progress
   small partial motion gives a small, localised response. Per-person
   normalization must NOT be done on the partial motion itself.
 
+## Entry 2 — better full-body dance data (higher-quality pose estimation)
+Old data was weak: intel surveillance clips (28–78% detection, ankles 0.1–0.5).
+Hunted for full-body dance with clean pose estimation. Network limits: CDNs 403,
+google.github.io/AIST++ 403, AIST++ GCS bucket gone (NoSuchBucket), KTH/Motorica
+behind SharePoint. Reachable: github raw / codeload / LFS, and the github trees
+API (intermittently). Found three good sources:
+
+- ✅ **Real dance VIDEO → MediaPipe** (`PrashantSaikia/...`): `benchmark_dance`,
+  `right_dance` — portrait, single dancer filling frame. **100% detection, full
+  body** (hips/shoulders 1.0, wrists ~0.9, ankles ~0.9). Huge jump over intel.
+  (`wrong_dance` is landscape with feet cropped → ankles 0.1; excluded.)
+- ✅ **"Dance with Melody" 3D Kinect pose** (`Music-to-dance-motion-synthesis`):
+  61 dance clips, each `skeletons.json` (23-joint 3D). Joint layout undocumented;
+  **decoded from bone-length topology + height + motion** and validated (rigid
+  bones: torso 45±1.9, arm 30±2.8, thigh 48±5.2; L/R + head>sh>hip>knee>ankle
+  all consistent). Loader: `sources.load_dance_skeleton_source`, map `MELODY_MAP`.
+- (kept) LAFAN1 mocap — 5 genuinely distinct dance subjects.
+
+### Evaluation insight (this is the iteration)
+- On benchmark/right_dance the bounce/feet signals are now reliable end-to-end —
+  the clean pose removes the NaN-inducing jumps the noisy npz had.
+- The 6 Dance-with-Melody clips come out **homogeneous** (all phrygian/rhythmic,
+  72–77 BPM, near-identical signatures) because they're the same performer/style
+  — the system is being *faithful*: similar movers → similar music. LAFAN1's
+  genuinely different subjects still span 3 palettes and 72–103 BPM. So
+  distinctness tracks real mover differences, not noise.
+- Cross-modality check: torso-normalization makes KE/Effort comparable across
+  capture systems (mocap cm, Kinect cm, MediaPipe image), so the same thresholds
+  generalize — verified by all three sources producing sensible, in-scale music.
+
 ## Log
 (newest at bottom)
 

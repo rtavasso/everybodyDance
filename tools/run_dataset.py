@@ -19,8 +19,18 @@ from everybody_dance.laban import LabanEstimator
 from everybody_dance.oscillator import EntrainedClock
 from everybody_dance.output import LogBackend
 from everybody_dance.personalization import Calibrator
-from everybody_dance.sources import load_bvh_source, load_npz_source
+from everybody_dance.sources import (load_bvh_source, load_dance_skeleton_source,
+                                      load_npz_source)
 from tools.synth import render
+
+
+def _load(path, kind, max_seconds):
+    if kind == "bvh":
+        return load_bvh_source(path, max_seconds=max_seconds)
+    if kind == "melody":
+        cfg = os.path.join(os.path.dirname(path), "config.json")
+        return load_dance_skeleton_source(path, config=cfg)
+    return load_npz_source(path)
 
 
 def calibrate_full(src):
@@ -40,10 +50,7 @@ def calibrate_full(src):
 
 
 def run_one(path, kind, max_seconds, calibrate, coupling, out_dir):
-    if kind == "bvh":
-        src = load_bvh_source(path, max_seconds=max_seconds)
-    else:
-        src = load_npz_source(path)
+    src = _load(path, kind, max_seconds)
     fps = src.fps
     profile = calibrate_full(src)              # representative calibration
     be = LogBackend()
@@ -110,7 +117,7 @@ def distinctness(sigs):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("paths", nargs="+", help="bvh/npz files or globs")
-    ap.add_argument("--kind", choices=["bvh", "npz"], default="bvh")
+    ap.add_argument("--kind", choices=["bvh", "npz", "melody"], default="bvh")
     ap.add_argument("--max-seconds", type=float, default=45)
     ap.add_argument("--calibrate", type=float, default=15)
     ap.add_argument("--coupling", type=float, default=0.4)

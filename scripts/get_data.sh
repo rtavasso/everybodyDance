@@ -31,6 +31,24 @@ for f in bolt-detection.mp4 face-demographics-walking.mp4 face-demographics-walk
   [ -f "data/videos/$f" ] || curl -L --fail -o "data/videos/$f" "$BASE/$f"
 done
 
+echo ">> Full-body dance VIDEOS (single dancer, full frame -> clean MediaPipe)"
+DBASE="https://raw.githubusercontent.com/PrashantSaikia/Body-Movement-Comparison-with-Mediapipe/master/dance_videos"
+for f in benchmark_dance right_dance; do
+  [ -f "data/videos/$f.mp4" ] || curl -L --fail -o "data/videos/$f.mp4" "$DBASE/$f.mp4"
+done
+
+echo ">> 'Dance with Melody' 3D Kinect skeletons (61 clips; grab a few)"
+MBASE="https://raw.githubusercontent.com/Music-to-dance-motion-synthesis/dataset/master"
+for n in 1 2 3 4 6 8; do
+  mkdir -p "data/melody/DANCE_C_$n"
+  for g in skeletons.json config.json; do
+    [ -f "data/melody/DANCE_C_$n/$g" ] || curl -L --fail -o "data/melody/DANCE_C_$n/$g" "$MBASE/DANCE_C_$n/$g" || true
+  done
+done
+
 echo ">> done. Next:"
+echo "   python tools/extract_pose.py data/videos/benchmark_dance.mp4 -o data/poses/benchmark_dance.npz"
+echo "   python -m tools.run_dataset 'data/poses/*.npz' --kind npz                  # real-video pose"
+echo "   python -m tools.run_dataset 'data/melody/DANCE_C_*/skeletons.json' --kind melody  # 3D Kinect dance"
 echo "   python tools/extract_pose.py data/videos/bolt-detection.mp4 -o data/poses/bolt.npz --max-seconds 20"
 echo "   python -m tools.run_dataset 'data/bvh/dance*.bvh' --max-seconds 50"

@@ -170,3 +170,12 @@ def test_no_hanging_notes_after_run():
     eng, be = _run([{"duration": 14, "tempo_hz": 2.0, "energy": 1.0}], calibrate=8)
     # panic at end emits all-notes-off on every channel
     assert any(e.kind == "cc" and e.a == 123 for e in be.events)
+
+
+def test_source_joint_maps_complete():
+    # the decoded BVH / Kinect / MediaPipe maps must cover all 13 joints uniquely
+    from everybody_dance.pose import JOINTS
+    from everybody_dance.sources import BVH_MAP, MELODY_MAP, MP_SUBSET
+    for m in (BVH_MAP, MELODY_MAP, MP_SUBSET):
+        assert set(m.keys()) == set(JOINTS)
+        assert len(set(m.values())) == len(JOINTS)   # no joint mapped twice
