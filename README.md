@@ -184,6 +184,40 @@ run.py               CLI
 tests/test_core.py   headless proofs (entrainment, scale-safety, coupling dial)
 ```
 
+## Live body-looper (build loops, lock them, then dance the gestalt)
+
+Inspired by Imogen Heap's Mi.Mu gloves, but whole-body. Build each instrument's
+loop with your body, commit it with a pedal, layer the next one; once everything
+is locked, the dance modulates the whole arrangement.
+
+```
+RECORD drums → [pedal] → RECORD bass → [pedal] → RECORD chord → [pedal] → RECORD lead → [pedal]
+   tempo entrains            tempo LOCKS on first commit; committed loops play back
+   to your bounce            while you record the next track
+→ LOCKED ENSEMBLE → PERFORM: the dance modulates the gestalt
+     continuous : energy/posture → master filter (CC74), intensity, density
+     gestures   : thrust→fill · stomp→drop (mute melody) · freeze→breakdown · open-up→build
+```
+
+- **Commit / advance**: foot pedal, space, or `c`. `u` = undo (re-record the
+  current take), `r` = reset, `q` = quit. (A pedal that emits a keypress works.)
+- Tempo locks on the first commit so every loop shares one grid; loops are
+  step-quantised to the entrained grid and stay in scale.
+
+```bash
+# Live: webcam in, MIDI out. Calibrate ~20s, then loop with the pedal.
+python run.py --mode loop --source webcam --backend midi
+
+# Offline: build the loop from a recorded dance with a scripted pedal, render WAV
+# (hear drums → +bass → +chord → +lead → perform):
+python -m tools.run_looper data/bvh/dance1_subject1.bvh --kind bvh \
+    --rec-seconds 7 --perform-seconds 22 --out out/looper.wav
+```
+
+Modules: `everybody_dance/looper.py` (loop station + perform modulation),
+`everybody_dance/controls.py` (pedal/keyboard + scripted control),
+`tools/run_looper.py` (offline render).
+
 ## Running on real data
 
 The instrument has been iterated against real bodies, not just the synthetic

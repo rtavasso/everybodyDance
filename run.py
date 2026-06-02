@@ -85,6 +85,60 @@ def print_demo_report(engine: Engine, args):
               f"{t.bpm:5.1f}bpm {lk} n={t.n_events}")
 
 
+def run_loop_mode(source, backend, args):
+    """Live body-looper: calibrate briefly, then build one instrument loop per
+    'commit' (foot pedal / space / 'c'). Keys: u=undo, r=reset, q=quit."""
+    from everybody_dance.controls import KeyboardControl, ScriptedControl
+    from everybody_dance.looper import LoopStation
+    from everybody_dance.personalization import Calibrator
+    from everybody_dance.features import FeatureExtractor
+    from everybody_dance.laban import LabanEstimator
+    from everybody_dance.oscillator import EntrainedClock
+
+    profile = None
+    if args.profile:
+        try:
+            profile = Profile.from_json(args.profile)
+        except FileNotFoundError:
+            pass
+
+    frames = source.frames()
+    control = ScriptedControl([]) if args.source == "synthetic" else KeyboardControl()
+    print("LOOPER: pedal/space/'c' = commit & advance · u = undo · r = reset · q = quit")
+    station = None
+    cal = None
+    start = None
+    try:
+        if profile is None:
+            print(f"calibrate: move freely for ~{args.calibrate:.0f}s ...")
+            cal = (Calibrator(), FeatureExtractor(fps=args.fps),
+                   LabanEstimator(), EntrainedClock())
+        for frame in frames:
+            if start is None:
+                start = frame.t
+            if cal is not None:
+                c, fe, lab, clk = cal
+                f = fe.update(frame)
+                c.observe(f, lab.update(f, f.dt), clk.update(float(f.bounce), f.dt).tempo_hz)
+                if frame.t - start >= args.calibrate:
+                    profile = c.finalize(signature=fe.signature.summary())
+                    cal = None
+                    print("calibrated. start looping: record drums -> commit -> bass -> ...")
+                continue
+            if station is None:
+                station = LoopStation(backend, profile)
+            station.step(frame, [cmd for cmd in control.poll(frame.t)])
+    except KeyboardInterrupt:
+        pass
+    finally:
+        backend.panic()
+        source.close()
+        backend.close()
+        control.close()
+    print("\nstopped.")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="everybodyDance: music that dances to you")
     ap.add_argument("--source", default="synthetic", choices=["synthetic", "webcam"])
@@ -107,6 +161,8 @@ def main(argv=None):
     ap.add_argument("--osc-port", type=int, default=9000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--demo", action="store_true", help="scripted run + report")
+    ap.add_argument("--mode", default="continuous", choices=["continuous", "loop"],
+                    help="continuous instrument, or live body-looper (pedal/key)")
     args = ap.parse_args(argv)
 
     source = build_source(args)
@@ -114,6 +170,9 @@ def main(argv=None):
         backend = make_backend("osc", host=args.osc_host, port=args.osc_port)
     else:
         backend = make_backend(args.backend)
+
+    if args.mode == "loop":
+        return run_loop_mode(source, backend, args)
 
     profile = None
     if args.profile:

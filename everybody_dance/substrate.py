@@ -98,6 +98,10 @@ class Substrate:
         self._phrase_pos += 1
         self._field_idx = self._phrase_pos % len(self.cfg.harmonic_field)
 
+    def set_field_index(self, i: int) -> None:
+        """Drive harmony deterministically (e.g. from loop position)."""
+        self._field_idx = i % len(self.cfg.harmonic_field)
+
     @property
     def chord_root_degree(self) -> int:
         return self.cfg.harmonic_field[self._field_idx]

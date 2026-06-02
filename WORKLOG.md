@@ -96,6 +96,33 @@ API (intermittently). Found three good sources:
   capture systems (mocap cm, Kinect cm, MediaPipe image), so the same thresholds
   generalize — verified by all three sources producing sensible, in-scale music.
 
+## Entry 3 — live body-looper (Imogen-Heap-style, whole body)
+New performance mode layered on the instrument. Decisions (asked the user):
+commit = out-of-band pedal/key (clean timing, no fragile gesture recog);
+perform = both continuous + structural gestures.
+
+Architecture: `controls.py` (pedal/keyboard + ScriptedControl for headless),
+`looper.py` (LoopStation). Phase machine RECORD(drums→bass→chord→lead)→PERFORM.
+- entrained clock provides the grid; tempo LOCKS on first commit so loops align.
+- loops are step-quantised buffers per role; committed loops replay
+  deterministically while the next track records; future tracks stay silent.
+- PERFORM: continuous master CC (filter/expression/mod from energy+posture),
+  intensity scales note velocity, hats density-gated by energy; gestures →
+  thrust=fill, stomp=drop, freeze=breakdown.
+
+Bugs found & fixed while iterating on real dance:
+- Recording during the calm intro → near-empty loops (nf.core_energy ~0). Fix:
+  `tools/run_looper.py` auto-finds the liveliest window and calibrates on it
+  (mirrors live use: calibrate on your actual movement, then loop).
+- Bass loop empty: density `0.6·core·(max4)` rounded to 0. Fix: while RECORDING a
+  track you're deliberately performing it, so density uses overall energy + a
+  floor (every take lays down notes); core/limb specificity stays in the
+  continuous instrument and in perform-mode. Bumped bass max density.
+Result: clean build-up drums→+bass→+chord→+lead→perform; 138/138 notes in scale;
+827 master-CC modulation events + fills in perform. 23/23 tests pass (added
+tests/test_looper.py: phases, capture/replay, tempo lock, track isolation,
+perform modulation, undo). Live path wired: `run.py --mode loop`.
+
 ## Log
 (newest at bottom)
 
