@@ -203,12 +203,38 @@ learnable and repeatable.
 ```bash
 # Offline: render the 4-panel looping-skeleton visualization + the WAV:
 python -m tools.render_build data/bvh/dance1_subject1.bvh --kind bvh
-
-# Live (audio): calibrate by dancing, then keep dancing and it builds:
-python run.py --mode build --source webcam --backend midi
 ```
 
 Modules: `everybody_dance/builder.py` (SongBuilder), `tools/render_build.py`.
+
+### Live sandbox (webcam + on-screen pose/UI/perf + sound, no DAW)
+
+The easiest way to play with it and give feedback. One window shows your camera
+with the tracked skeleton, the song-builder UI (2×2 instrument grid + looping
+ghosts), the pitch-height meter, the loop timeline, and a live FPS / inference /
+draw HUD. A **built-in real-time synth** plays the song as it builds — no MIDI
+port, DAW, or soundfont needed.
+
+**Windows (one shot — sets up a venv and runs):**
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\sandbox_windows.ps1
+# pass through any flags, e.g.:  ... sandbox_windows.ps1 --mirror --calibrate 10
+```
+
+**Any OS (manual):**
+```bash
+pip install -r requirements-realtime.txt
+python -m tools.live              # --mirror  --camera 1  --calibrate 10  --no-audio
+```
+
+First run downloads the MediaPipe pose weights automatically (cached after). It
+runs on **CPU** (real-time at `--complexity 1`); there is no GPU path on Windows
+via pip, and none is needed. Flow: dance freely during the short calibration,
+then keep dancing — drums→bass→keys→lead author themselves (hits place the
+rhythm, crouch/rise sets the pitch). Keys: `q` quit · `r` restart song · `c`
+re-calibrate · `SPACE` pause · `--record out.mp4` to capture the window.
+
+After a session, jot notes in `FEEDBACK.md` and I'll iterate.
 
 ## Live body-looper (build loops, lock them, then dance the gestalt)
 

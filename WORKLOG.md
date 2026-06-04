@@ -147,6 +147,35 @@ Open: this is offline-on-recorded-dance; real validation needs a live dancer
 intentionally placing hits/heights. Perform-phase gestalt modulation not yet
 ported into builder.
 
+## Entry 5 — live sandbox (webcam + on-screen pose/UI/perf + zero-setup audio)
+For the user to actually play with the builder and report feedback on Windows.
+- Facts established: MediaPipe `solutions.pose` auto-downloads/caches weights and
+  runs CPU (XNNPACK); no GPU path via pip on Windows, and none needed (real-time
+  at complexity 1). Documented honestly rather than promising GPU.
+- `everybody_dance/voices.py`: shared synth voices (single source of truth);
+  tools/synth.py now imports `render_note` from it.
+- `everybody_dance/rtaudio.py`: RealtimeSynth backend via sounddevice -- renders
+  each note_on to a finite buffer, mixes in the audio callback, soft-clips. Zero
+  external setup (no DAW/MIDI/soundfont); degrades to a silent no-op if
+  sounddevice/PortAudio is absent. Mixer split out as `_mix` so it's unit-tested
+  without a device.
+- `everybody_dance/viz.py`: shared drawing (skeleton, instrument panels, timeline,
+  pitch meter); `compose_offline` (render_build now reuses it) + `compose_live`
+  (camera + 2x2 grid + HUD).
+- `everybody_dance/calib.py`: shared calibration (batch + streaming
+  BuildCalibrator) returning profile, octave-folded tempo, per-person hit thresh.
+- `tools/live.py`: the sandbox -- webcam capture, MediaPipe, calibrate-then-build
+  FSM, single window with FPS/infer/draw HUD, real-time audio, keys
+  q/r/c/SPACE + --record/--mirror/--no-audio.
+- `scripts/sandbox_windows.ps1` (venv + install + run), requirements-realtime
+  (+sounddevice), README sandbox section, FEEDBACK.md template.
+- Could NOT test camera/audio/GUI in this headless Linux box; verified everything
+  underneath headlessly: imports, voices (finite/bounded/deterministic), rt mixer
+  (mix/drain/polyphony-cap/panic/disabled-noop), fold_tempo, compose_live frame,
+  offline render parity. 35/35 tests pass (added tests/test_sandbox.py).
+Open: live latency/feel and pose stability need the user's real run + FEEDBACK.md;
+skeletons can overflow panel bottoms (cosmetic clip TODO).
+
 ## Log
 (newest at bottom)
 
