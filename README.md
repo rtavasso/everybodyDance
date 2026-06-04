@@ -184,6 +184,32 @@ run.py               CLI
 tests/test_core.py   headless proofs (entrainment, scale-safety, coupling dial)
 ```
 
+## Song-builder (dance continuously, the song builds itself)
+
+No controls, no pedal. Instruments are authored in a fixed order and the phases
+auto-advance to the clock; you just keep dancing and a chorus of looping skeleton
+"ghosts" accumulates as the song builds. Each instrument gets two **deterministic,
+body-authored** passes — the fix for "the body only drives macro-knobs":
+
+- **RHYTHM**: your hits (sharp extremity strikes) place the note onsets on the
+  grid — *you* choose placement (no Euclidean pattern, no RNG).
+- **PITCH**: the rhythm loops back; your whole-body height (crouch→rise) sets each
+  onset's pitch as it replays (snapped to scale, but your contour — no chord-tone
+  nudge, no RNG). Drums map height → kick/snare/hat.
+
+Same dance → byte-identical song (it's deterministic), so the instrument is
+learnable and repeatable.
+
+```bash
+# Offline: render the 4-panel looping-skeleton visualization + the WAV:
+python -m tools.render_build data/bvh/dance1_subject1.bvh --kind bvh
+
+# Live (audio): calibrate by dancing, then keep dancing and it builds:
+python run.py --mode build --source webcam --backend midi
+```
+
+Modules: `everybody_dance/builder.py` (SongBuilder), `tools/render_build.py`.
+
 ## Live body-looper (build loops, lock them, then dance the gestalt)
 
 Inspired by Imogen Heap's Mi.Mu gloves, but whole-body. Build each instrument's

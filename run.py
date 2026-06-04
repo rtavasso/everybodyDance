@@ -139,6 +139,58 @@ def run_loop_mode(source, backend, args):
     return 0
 
 
+def run_build_mode(source, backend, args):
+    """Live song-builder: calibrate briefly, then dance continuously while the
+    instruments auto-advance (drums->bass->keys->lead) and the song builds.
+    (Audio path; the looping-skeleton visual is the offline tools/render_build.py.)"""
+    import numpy as np
+    from everybody_dance.builder import SongBuilder
+    from everybody_dance.personalization import Calibrator
+    from everybody_dance.features import FeatureExtractor
+    from everybody_dance.laban import LabanEstimator
+    from everybody_dance.oscillator import EntrainedClock
+    from everybody_dance.pose import JOINT_INDEX
+
+    idx = [JOINT_INDEX[j] for j in ("l_wrist", "r_wrist", "l_ankle", "r_ankle")]
+    cal = (Calibrator(), FeatureExtractor(fps=args.fps), LabanEstimator(),
+           EntrainedClock(), [])
+    builder = None
+    start = None
+    print(f"BUILD: calibrate by dancing for ~{args.calibrate:.0f}s, then keep "
+          f"dancing -- the song builds itself.")
+    try:
+        for frame in source.frames():
+            if start is None:
+                start = frame.t
+            if cal is not None:
+                c, fe, lab, clk, hits = cal
+                f = fe.update(frame)
+                c.observe(f, lab.update(f, f.dt), clk.update(float(f.bounce), f.dt).tempo_hz)
+                hits.append(float(f.accel_mag[idx].max()))
+                if frame.t - start >= args.calibrate:
+                    prof = c.finalize(signature=fe.signature.summary())
+                    tempo = prof.char_tempo_hz
+                    while tempo < 1.0:
+                        tempo *= 2
+                    while tempo > 2.3:
+                        tempo /= 2
+                    builder = SongBuilder(backend, prof, tempo,
+                                          float(np.percentile(hits, 72)))
+                    cal = None
+                    print("go! drums -> bass -> keys -> lead, hits place rhythm, "
+                          "crouch/rise sets pitch.")
+                continue
+            builder.step(frame)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        backend.panic()
+        source.close()
+        backend.close()
+    print("\nstopped.")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="everybodyDance: music that dances to you")
     ap.add_argument("--source", default="synthetic", choices=["synthetic", "webcam"])
@@ -161,7 +213,7 @@ def main(argv=None):
     ap.add_argument("--osc-port", type=int, default=9000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--demo", action="store_true", help="scripted run + report")
-    ap.add_argument("--mode", default="continuous", choices=["continuous", "loop"],
+    ap.add_argument("--mode", default="continuous", choices=["continuous", "loop", "build"],
                     help="continuous instrument, or live body-looper (pedal/key)")
     args = ap.parse_args(argv)
 
@@ -173,6 +225,8 @@ def main(argv=None):
 
     if args.mode == "loop":
         return run_loop_mode(source, backend, args)
+    if args.mode == "build":
+        return run_build_mode(source, backend, args)
 
     profile = None
     if args.profile:

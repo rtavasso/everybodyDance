@@ -123,6 +123,30 @@ Result: clean build-up drums→+bass→+chord→+lead→perform; 138/138 notes i
 tests/test_looper.py: phases, capture/replay, tempo lock, track isolation,
 perform modulation, undo). Live path wired: `run.py --mode loop`.
 
+## Entry 4 — song-builder ("dance continuously, the song builds")
+Reframe of the looper after the red-team (which showed the body controlled
+macro-knobs, not salient events: pitch/onset owned by scale+Euclid+RNG). Design
+converged via UX discussion -> "auto-advance" makes instrument selection
+unnecessary; deterministic order, and each committed stem becomes a looping
+skeleton ghost. The fix for the fatal critique:
+- RHYTHM pass: the body's HITS (extremity accel peaks, per-person threshold +
+  refractory) place onsets on the grid -- you choose placement (no Euclid/RNG).
+- PITCH pass: the rhythm loops; whole-body HEIGHT (crouch->rise = nf.com_height,
+  already calibrated) sets each onset's pitch, snapped to scale but no chord-tone
+  nudge, no RNG. Drums use height -> kick/snare/hat.
+- Deterministic end-to-end: `test_determinism_same_dance_same_song` proves the
+  same dance yields a byte-identical song -> learnable/repeatable (the red-team's
+  repeatability critique addressed).
+- `builder.py` SongBuilder (FSM: count-in -> per instrument [rhythm,pitch] ->
+  loop; captures a looping skeleton ghost per stem). `tools/render_build.py`
+  renders the 4-panel "chorus of skeletons" overlay + the WAV. `run.py --mode
+  build` is the live audio path.
+- Validated on real LAFAN1 dance: 166/166 notes in scale; all 4 stems authored
+  and looping. 28/28 tests pass (added tests/test_builder.py).
+Open: this is offline-on-recorded-dance; real validation needs a live dancer
+intentionally placing hits/heights. Perform-phase gestalt modulation not yet
+ported into builder.
+
 ## Log
 (newest at bottom)
 
