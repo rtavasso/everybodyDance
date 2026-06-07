@@ -221,15 +221,31 @@ powershell -ExecutionPolicy Bypass -File scripts\sandbox_windows.ps1
 # pass through any flags, e.g.:  ... sandbox_windows.ps1 --mirror --calibrate 10
 ```
 
+**macOS (Intel & Apple Silicon) and Linux (one shot):**
+```bash
+bash scripts/sandbox_unix.sh --mirror      # any tools.live flags pass through
+```
+
 **Any OS (manual):**
 ```bash
 pip install -r requirements-realtime.txt
 python -m tools.live              # --mirror  --camera 1  --calibrate 10  --no-audio
 ```
 
+Platform notes:
+- **Intel Macs (x86_64):** Google's last MediaPipe wheel for Intel is `0.10.20`,
+  which only builds for **Python 3.10–3.12** — so use one of those (e.g.
+  `brew install python@3.12`, then `PYTHON=python3.12 bash scripts/sandbox_unix.sh`).
+  `requirements-realtime.txt` already pins `0.10.20` on Intel macOS automatically.
+  Apple Silicon / Linux / Windows just get the latest MediaPipe.
+- **macOS camera permission:** first run, macOS asks your terminal for camera
+  access (System Settings → Privacy & Security → Camera). If the feed is black,
+  enable it there and re-run.
+
 First run downloads the MediaPipe pose weights automatically (cached after). It
-runs on **CPU** (real-time at `--complexity 1`); there is no GPU path on Windows
-via pip, and none is needed. Flow: dance freely during the short calibration,
+runs on **CPU** (real-time at `--complexity 1`) on every platform — there is no
+GPU/Metal path via the pip wheels (Intel Mac included), and none is needed. Flow:
+dance freely during the short calibration,
 then keep dancing — drums→bass→keys→lead author themselves (hits place the
 rhythm, crouch/rise sets the pitch). Keys: `q` quit · `r` restart song · `c`
 re-calibrate · `SPACE` pause · `--record out.mp4` to capture the window.

@@ -176,6 +176,21 @@ For the user to actually play with the builder and report feedback on Windows.
 Open: live latency/feel and pose stability need the user's real run + FEEDBACK.md;
 skeletons can overflow panel bottoms (cosmetic clip TODO).
 
+## Entry 6 — Intel-mac (x86_64) support for the live sandbox
+Code is platform-neutral; the issue is packaging. Verified against PyPI:
+- MediaPipe latest (0.10.35) ships NO Intel-mac wheel (only macosx_11_0_arm64,
+  linux x86_64, win). Last version with an x86_64 macOS wheel is 0.10.20
+  (cp310/311/312). OpenCV is fine on Intel mac (x86_64 wheels through cp313).
+- requirements-realtime.txt: env-marker split -- `mediapipe==0.10.20` on
+  `sys_platform=='darwin' and platform_machine=='x86_64'`, else `mediapipe>=0.10`.
+  Used De Morgan complement (`!=...or...!=`) because PEP 508 markers have no
+  `not(...)`; verified mutually exclusive + exhaustive across the 4 platforms.
+- scripts/sandbox_unix.sh: macOS (Intel+Silicon) + Linux launcher; on Intel mac
+  it checks Python is 3.10-3.12 and errors with a fix (PYTHON=python3.12 ...);
+  prints the macOS camera-permission hint.
+- README platform notes (Intel-mac Python pin, camera TCC, CPU-only everywhere).
+Couldn't run on a Mac from here; validated shell syntax + marker resolution.
+
 ## Log
 (newest at bottom)
 

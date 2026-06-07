@@ -1,6 +1,13 @@
 -r requirements.txt
-mediapipe>=0.10        # pose estimation from a webcam (auto-downloads weights, CPU)
-opencv-python>=4.8     # camera capture + the live window
+
+# --- Pose estimation (auto-downloads weights, runs on CPU) ----------------
+# Google stopped shipping Intel-mac (x86_64) wheels after mediapipe 0.10.20,
+# which targets Python 3.10-3.12. So Intel Macs pin to 0.10.20; everyone else
+# (Apple Silicon, Linux, Windows) gets the latest.
+mediapipe==0.10.20 ; sys_platform == 'darwin' and platform_machine == 'x86_64'
+mediapipe>=0.10     ; sys_platform != 'darwin' or platform_machine != 'x86_64'
+
+opencv-python>=4.8     # camera capture + the live window (Intel-mac wheels exist)
 sounddevice>=0.4       # built-in real-time synth (no DAW needed); bundles PortAudio
 python-rtmidi>=1.5     # optional: MIDI out to a DAW instead of the built-in synth
 python-osc>=1.8        # optional: OSC out
