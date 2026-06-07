@@ -4,6 +4,10 @@ An interactive instrument that watches a body and **generates music tied to how
 that person moves** — specific to them, alive, coherent. Not a sonification toy,
 not a backing track to dance over. A partner.
 
+> **Building on this?** Start with [`docs/KICKOFF.md`](docs/KICKOFF.md) — the
+> development design doc: product vision, the problems to solve, and design goals
+> written so each is provably met-or-not by an LLM with bash + screenshots.
+
 Body tracking in, music out, where the music is audibly *caused* by the movement
 and feels musical the whole time. Timbres are out of scope: the output is
 MIDI/OSC into your own synths (fixed timbres). This is about **structure,
