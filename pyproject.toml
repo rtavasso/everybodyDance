@@ -26,6 +26,8 @@ everybodydance = "run:main"
 [dependency-groups]
 # Synced by default by `uv sync`.
 dev = ["pytest>=7"]
+# The LLM-judge grader (opt-in): `uv sync --group eval`.
+eval = ["anthropic>=0.40"]
 
 [build-system]
 requires = ["hatchling"]

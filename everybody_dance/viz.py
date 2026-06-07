@@ -116,6 +116,63 @@ def draw_pitch_meter(canvas, pitch01, x0, y0, h, w=12):
 
 # -- whole-frame compositions ---------------------------------------------
 
+CH_ROLE = {1: "bass", 2: "keys", 3: "lead", 10: "drums"}
+
+
+def pianoroll(events, dur, W=1000, H=360):
+    """A piano-roll image of the emitted notes so the judge can 'see' the music."""
+    img = np.full((H, W, 3), 26, np.uint8)
+    x0, y0, pw, ph = 50, 16, W - 64, H - 70
+    notes, drums, active = [], [], {}
+    for e in sorted(events, key=lambda x: (x.t, x.kind == "note_on")):
+        if e.kind not in ("note_on", "note_off"):
+            continue
+        if e.channel == 10:
+            if e.kind == "note_on":
+                drums.append((e.t, e.b))
+            continue
+        key = (e.channel, e.a)
+        if e.kind == "note_on":
+            active[key] = (e.t, e.b)
+        elif key in active:
+            t0, v = active.pop(key)
+            notes.append((e.channel, e.a, t0, e.t - t0, v))
+    for (ch, a), (t0, v) in active.items():
+        notes.append((ch, a, t0, dur - t0, v))
+    ps = [n[1] for n in notes] or [60]
+    lo, hi = min(ps) - 1, max(ps) + 1
+    span = max(hi - lo, 1)
+    for k in range(0, span + 1, 3):
+        y = int(y0 + ph - k / span * ph)
+        cv2.line(img, (x0, y), (x0 + pw, y), (40, 40, 40), 1)
+    for ch, a, t0, d, v in notes:
+        x = int(x0 + t0 / max(dur, 1e-6) * pw)
+        xe = int(x0 + (t0 + d) / max(dur, 1e-6) * pw)
+        y = int(y0 + ph - (a - lo) / span * ph)
+        col = tuple(int(c * (0.4 + 0.6 * v / 127)) for c in COLORS[CH_ROLE[ch]])
+        cv2.rectangle(img, (x, y - 4), (max(xe, x + 2), y + 4), col, -1)
+    yd = H - 30
+    cv2.putText(img, "drums", (4, yd + 4), FONT, 0.4, COLORS["drums"], 1)
+    for t0, v in drums:
+        x = int(x0 + t0 / max(dur, 1e-6) * pw)
+        cv2.line(img, (x, yd - 8), (x, yd + 8), COLORS["drums"], 1)
+    cv2.putText(img, "pitch", (4, y0 + 12), FONT, 0.4, (150, 150, 150), 1)
+    cv2.putText(img, f"0 - {dur:.0f}s", (x0, H - 6), FONT, 0.4, (150, 150, 150), 1)
+    return img
+
+
+def contact_sheet(imgs, cols=3, pad=6, bg=18):
+    n = len(imgs)
+    rows = (n + cols - 1) // cols
+    h, w = imgs[0].shape[:2]
+    sheet = np.full((rows * h + pad * (rows + 1), cols * w + pad * (cols + 1), 3), bg, np.uint8)
+    for i, im in enumerate(imgs):
+        r, c = divmod(i, cols)
+        y, x = pad + r * (h + pad), pad + c * (w + pad)
+        sheet[y:y + h, x:x + w] = im
+    return sheet
+
+
 def compose_offline(ui, W, H, loop_steps):
     """The 4-panels-in-a-row layout used by render_build.py."""
     img = np.full((H, W, 3), 24, np.uint8)

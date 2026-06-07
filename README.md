@@ -232,6 +232,34 @@ Note on tracking: the skeleton is hip-centred, so pure vertical translation
 (a jump) isn't recoverable from pose alone — the built-ins use body *shape* and
 limb motion instead.
 
+### Observability harness (pictures + metrics + LLM judge)
+
+How a dev knows a change made it *better*, for an art-exhibit instrument where
+"good" is mostly perceptual. Because replay is deterministic, the same recorded
+movement runs through any code version and produces a comparable scorecard.
+
+```bash
+python -m tools.grade                      # scripted session -> bundle (dry run)
+python -m tools.grade --real data/bvh/dance1_subject1.bvh
+python -m tools.grade --judge              # also call Claude to grade (uv sync --group eval; ANTHROPIC_API_KEY)
+```
+
+It replays the movement, then writes to `out/grade/`: **pictures of the output**
+(`contact_sheet.png` of overlay stills with move-flashes, `pianoroll.png` of the
+music) and **objective metrics** (`metrics.json`) across all four dimensions:
+
+- **coupling** — body→music correlation matrix, plus *dead-zones* (move, no
+  sound) and *phantoms* (sound, no move).
+- **musicality** — in-scale %, density, dynamic range, distinct pitches.
+- **recognition** — gesture recall / precision / latency vs. labels.
+- **timing** — per-frame compute headroom vs. the frame budget.
+
+These are checked against exhibit **SLOs** (CI pass/fail), and an **LLM judge**
+grades the pictures + metrics against a gallery rubric (coupling, liveliness,
+musicality, gesture legibility, visual aesthetic, robustness) into a
+`scorecard.json`. Modules: `everybody_dance/metrics.py`,
+`everybody_dance/judge.py`, `tools/grade.py`.
+
 ### Live sandbox (webcam + on-screen pose/UI/perf + sound, no DAW)
 
 The easiest way to play with it and give feedback. One window shows your camera

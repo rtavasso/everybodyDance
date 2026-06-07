@@ -236,6 +236,33 @@ in-scale. 42/42 tests (added tests/test_gestures.py incl. DTW).
 Open: ARMS CROSSED a bit trigger-happy on real dance (45/131s); jump/stomp need
 raw image-y in the live path; DTW "teach a move" key not yet bound in live.
 
+## Entry 9 — observability harness (pictures + metrics + LLM judge)
+Direction set: product = creative instrument for an ART EXHIBIT (no scoring/UGC);
+measure ALL four kinds of good; evaluator = "LLM grades + takes pictures of
+outputs". Built on the determinism we banked earlier: same movement replays to
+identical output -> a real regression signal.
+- metrics.py: coupling (body->music correlation matrix + dead_zone/phantom),
+  musicality (in-scale/density/dynamics), recognition (recall/precision/latency
+  vs labels), timing (compute headroom). SLO dict + check_slo for CI pass/fail.
+- judge.py: gallery rubric (coupling, liveliness, musicality, gesture_legibility,
+  visual_aesthetic, robustness), prompt builder, response parser, Scorecard, and
+  an injectable Claude vision grader (lazy anthropic; key via env; dry-run/test
+  friendly).
+- viz.py: pianoroll (music made visible) + contact_sheet (tiled overlay stills) =
+  the "pictures of outputs".
+- tools/grade.py: replay (ambient engine + gesture layer) -> artifacts
+  (contact_sheet.png, pianoroll.png, metrics.json, prompt.txt) -> judge ->
+  scorecard.json. scripted_performer now emits ground-truth labels for recall.
+- requirements-eval.txt + pyproject [dependency-groups] eval = anthropic; relocked.
+Validated on scripted session: coupling 0.60, in-scale 100%, recall 1.0 /
+precision 0.89 / latency 67ms, compute headroom 99% -- all 4 SLOs pass. The
+harness surfaced phantom=0.67 (ambient pads sustain through stillness); judging
+the bundle as the LLM independently flagged the same issue -> loop works. 56/56
+tests (added test_metrics.py, test_judge.py).
+Open: live e2e latency still needs the HUD path; multi-version A/B (replay through
+engine A vs B -> two bundles -> diff/prefer) is a thin layer on top, not built;
+no real webcam session corpus yet (uses dance corpus + scripted performer).
+
 ## Log
 (newest at bottom)
 

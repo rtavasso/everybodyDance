@@ -1,0 +1,2 @@
+-r requirements-realtime.txt
+anthropic>=0.40   # LLM-as-judge grader (tools/grade.py --judge); needs ANTHROPIC_API_KEY

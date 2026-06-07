@@ -46,8 +46,12 @@ def _pose(**ov):
     return np.array([p[j] for j in JOINTS], float)
 
 
-def scripted_performer(fps=FPS):
-    """A dancer who performs every built-in move in turn (clean cause->effect)."""
+def scripted_performer(fps=FPS, with_labels=False):
+    """A dancer who performs every built-in move in turn (clean cause->effect).
+
+    With `with_labels`, also returns ground-truth (t, name) for each move (the
+    moment it reaches its held pose) -- the recall/precision reference.
+    """
     NEU = _pose()
     moves = [
         ("HANDS UP", _pose(l_wrist=(-.3, 1.6, 0), r_wrist=(.3, 1.6, 0),
@@ -70,7 +74,7 @@ def scripted_performer(fps=FPS):
     ]
     guard = _pose(l_wrist=(-.35, .9, 0), r_wrist=(.35, .9, 0),
                   l_elbow=(-.4, .7, 0), r_elbow=(.4, .7, 0))
-    seq = []
+    seq, labels = [], []
     lerp = lambda a, b, n: [a + (b - a) * k / max(n - 1, 1) for k in range(n)]
     hold = lambda p, s: seq.extend([p] * int(s * fps))
     move = lambda a, b, s: seq.extend(lerp(a, b, int(s * fps)))
@@ -81,6 +85,7 @@ def scripted_performer(fps=FPS):
             move(guard, target, .14)
         else:
             move(NEU, target, .18)
+        labels.append((len(seq) / fps, name))      # reached the held pose
         hold(target, .55)
         move(target, NEU, .2)
         hold(NEU, .55)
@@ -94,7 +99,7 @@ def scripted_performer(fps=FPS):
     t = np.arange(len(seq)) / fps
     seq[:, up, 0] += (0.12 * np.sin(2 * np.pi * 1.6 * t))[:, None]
     seq[:, feet, 1] += (0.08 * np.sin(2 * np.pi * 2.0 * t))[:, None]
-    return seq
+    return (seq, labels) if with_labels else seq
 
 
 def make_profile(src_frames, fps):
