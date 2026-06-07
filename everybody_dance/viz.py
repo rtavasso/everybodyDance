@@ -26,17 +26,17 @@ BADGE = {"pending": "", "rhythm": "REC RHYTHM", "pitch": "REC PITCH", "saved": "
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
-def _proj(xyz, x0, y0, w, h):
+def _proj(xyz, x0, y0, w, h, xr=(-0.8, 0.8), yr=(-1.1, 0.9)):
     pts = {}
     for j, i in JOINT_INDEX.items():
-        x = (xyz[i, 0] + 0.8) / 1.6
-        y = 1.0 - (xyz[i, 1] + 1.1) / 2.0
+        x = (xyz[i, 0] - xr[0]) / (xr[1] - xr[0])
+        y = 1.0 - (xyz[i, 1] - yr[0]) / (yr[1] - yr[0])
         pts[j] = (int(x0 + x * w), int(y0 + y * h))
     return pts
 
 
-def draw_skeleton(img, xyz, x0, y0, w, h, color, thick=2):
-    p = _proj(xyz, x0, y0, w, h)
+def draw_skeleton(img, xyz, x0, y0, w, h, color, thick=2, xr=(-0.8, 0.8), yr=(-1.1, 0.9)):
+    p = _proj(xyz, x0, y0, w, h, xr, yr)
     for a, b in BONES:
         cv2.line(img, p[a], p[b], color, thick, cv2.LINE_AA)
     for j in p:
@@ -82,6 +82,29 @@ def draw_timeline(canvas, ui, loop_steps, x0, y0, w, row_h=22):
                 cv2.rectangle(canvas, (sx, y), (sx + 4, y + row_h - 6), COLORS[role], -1)
     px = x0 + 26 + int(ui.playhead / loop_steps * (w - 26))
     cv2.line(canvas, (px, y0 - 4), (px, y0 + len(ui.order) * row_h), (255, 255, 255), 1)
+
+
+def draw_flashes(canvas, flashes, t):
+    """Just-Dance-style feedback: a colour vignette + the move name, fading out."""
+    H, W = canvas.shape[:2]
+    for f in flashes:
+        a = f.alpha(t)
+        if a <= 0:
+            continue
+        if f.big:                                  # full-screen edge glow
+            border = int(26 * a)
+            ov = canvas.copy()
+            cv2.rectangle(ov, (0, 0), (W - 1, H - 1), f.color, border * 2)
+            cv2.addWeighted(ov, 0.55 * a, canvas, 1 - 0.55 * a, 0, canvas)
+    if flashes:
+        f = flashes[-1]                            # name the most recent move
+        a = f.alpha(t)
+        scale = 1.4 + (1 - a) * 0.6
+        (tw, th), _ = cv2.getTextSize(f.name, FONT, scale, 3)
+        x = (W - tw) // 2
+        col = tuple(int(c) for c in f.color)
+        cv2.putText(canvas, f.name, (x, int(H * 0.30)), FONT, scale, (0, 0, 0), 6, cv2.LINE_AA)
+        cv2.putText(canvas, f.name, (x, int(H * 0.30)), FONT, scale, col, 3, cv2.LINE_AA)
 
 
 def draw_pitch_meter(canvas, pitch01, x0, y0, h, w=12):
@@ -142,4 +165,7 @@ def compose_live(camera_bgr, ui, perf: Dict, loop_steps, W=1280, H=720):
     # --- pitch meter + timeline (bottom) ---
     draw_pitch_meter(canvas, ui.pitch01, W - 30, 92, 405)
     draw_timeline(canvas, ui, loop_steps, 30, H - 200, W - 80, 26)
+    # --- gesture flashes (Just-Dance style), drawn last so they sit on top ---
+    if perf.get("flashes"):
+        draw_flashes(canvas, perf["flashes"], perf.get("t", 0.0))
     return canvas

@@ -206,6 +206,36 @@ everybody_dance, console script `everybodydance`) + uv.lock so `uv sync` works.
   it on mac/win); rtaudio already degrades to silent. README: uv as recommended
   path + Linux-audio note.
 
+## Entry 8 — gesture layer (Just-Dance-style moves -> effects + flash)
+How Just Dance works: it's template matching against a *time-synced authored
+reference* (Wii = right-hand accelerometer signature; Kinect/phone = pose/accel),
+scoring how well you match the expected move in each window ("gold moves"). Not
+open-vocabulary recognition.
+What we built (the salient/learnable/repeatable triggers the red-team wanted),
+layered OVER the continuous mapping so open-ended dance still drives music:
+- gestures.py: GestureRecognizer with StaticPose/HeuristicMotion predicates +
+  DTWGesture (record-a-move template matching, the Just-Dance analog). All
+  deterministic. Library: HANDS UP, RAISE L/R, T-POSE, SQUAT, ARMS CROSSED,
+  CLAP, PUNCH.
+  KEY design constraint discovered: skeleton is hip-centred + torso-normalised,
+  so (a) global translation is gone -> "jump" is unrecoverable here (dropped;
+  needs raw image-y), and (b) thresholds are torso units (standing verticality
+  ~3, not 0.4). Squat uses an auto-calibrated verticality ratio (person-indep).
+  Tightened PUNCH (one-arm horizontal jab) + CLAP (meet-not-cross) to kill
+  crosstalk with T-pose/hands-up/arms-crossed.
+- effects.py: EffectEngine maps move -> in-scale one-shot (snare/riser/drop/
+  stab/...) via the Substrate + a fading Flash. note_on(dur)+future note_off so
+  both rt + offline backends work.
+- viz.draw_flashes: body-glow + vignette + big move name. compose_live draws it.
+- tools/render_gestures.py: scripted-performer demo (all 8 moves, clean
+  cause->effect) + ambient engine + WAV; --real <bvh> runs on real dance.
+- Wired into tools/live.py (gesture layer active during build phase).
+Validated: scripted performer fires all 8, no crosstalk, deterministic; real
+131s BVH fired 75 across all types; demo: 85 ambient + 23 fx notes, all fx
+in-scale. 42/42 tests (added tests/test_gestures.py incl. DTW).
+Open: ARMS CROSSED a bit trigger-happy on real dance (45/131s); jump/stomp need
+raw image-y in the live path; DTW "teach a move" key not yet bound in live.
+
 ## Log
 (newest at bottom)
 

@@ -207,6 +207,31 @@ python -m tools.render_build data/bvh/dance1_subject1.bvh --kind bvh
 
 Modules: `everybody_dance/builder.py` (SongBuilder), `tools/render_build.py`.
 
+### Gesture layer (specific moves -> effects + flash, à la Just Dance)
+
+Open-ended dancing keeps shaping the music, **and** specific recognised moves
+punch in their own one-shot effect with a Just-Dance-style flash (the body glows,
+the move is named, a colour vignette frames the screen). This is the *salient,
+learnable, repeatable* control the continuous mapping lacked — same move, same
+effect, every time (no RNG).
+
+Built-in moves: HANDS UP (riser), RAISE LEFT / RIGHT (lead accents), T-POSE
+(drop), SQUAT (bass drop), ARMS CROSSED (downlifter), CLAP (snare), PUNCH (chord
+stab). All effect notes are snapped to the active scale. You can also record your
+own move as a DTW template (`gestures.record_template`) — the same
+reference-matching idea Just Dance uses.
+
+```bash
+python -m tools.render_gestures                 # scripted demo of every move
+python -m tools.render_gestures --real data/bvh/dance1_subject1.bvh   # on a real dance
+```
+The gesture layer is also live in the sandbox below. Modules:
+`everybody_dance/gestures.py`, `everybody_dance/effects.py`.
+
+Note on tracking: the skeleton is hip-centred, so pure vertical translation
+(a jump) isn't recoverable from pose alone — the built-ins use body *shape* and
+limb motion instead.
+
 ### Live sandbox (webcam + on-screen pose/UI/perf + sound, no DAW)
 
 The easiest way to play with it and give feedback. One window shows your camera

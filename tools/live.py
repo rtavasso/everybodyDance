@@ -67,7 +67,15 @@ def main():
                       f"audio off: {backend.error} (pip install sounddevice)")
     cfg = BuilderConfig()
 
-    state = {"phase": "calib", "cal": BuildCalibrator(), "sb": None,
+    # gesture layer: recognised moves -> one-shot effects + on-screen flash,
+    # layered over the continuous song-builder.
+    from everybody_dance.effects import EffectEngine
+    from everybody_dance.features import FeatureExtractor
+    from everybody_dance.gestures import GestureRecognizer, default_gestures
+    gfe = FeatureExtractor()
+    rec = GestureRecognizer(default_gestures())
+
+    state = {"phase": "calib", "cal": BuildCalibrator(), "sb": None, "fx": None,
              "prof": None, "tempo": None, "thr": None, "paused": False,
              "t0": time.time()}
 
@@ -76,6 +84,7 @@ def main():
             backend.panic()
         state["sb"] = SongBuilder(backend or _Null(), state["prof"],
                                   state["tempo"], state["thr"], cfg)
+        state["fx"] = EffectEngine(backend or _Null(), state["sb"].sub)
         state["phase"] = "build"
 
     writer = None
@@ -119,14 +128,22 @@ def main():
                 ui = state["sb"].step(pf)
                 state["_last_ui"] = ui
 
+            # --- gesture layer (active once the song is building) ---
+            flashes = []
+            if state["fx"] is not None and present and not state["paused"]:
+                gfeats = gfe.update(pf)
+                for ev in rec.update(pf, gfeats):
+                    state["fx"].trigger(ev.name, now)
+                flashes = state["fx"].active_flashes(now)
+
             # --- compose & show ---
             t_draw = time.time()
             dt = now - last
             last = now
             fps_ema = 0.9 * fps_ema + 0.1 * (1.0 / dt if dt > 0 else 0)
             perf = {"fps": fps_ema, "infer_ms": infer_ms, "audio": bool(backend and backend.ok),
-                    "landmarks_px": px, "note": audio_note,
-                    "draw_ms": 0.0}
+                    "landmarks_px": px, "note": audio_note, "draw_ms": 0.0,
+                    "flashes": flashes, "t": now}
             canvas = compose_live(frame, ui, perf, cfg.loop_steps)
             perf_draw = (time.time() - t_draw) * 1000
             cv2.putText(canvas, f"draw {perf_draw:.0f}ms", (300, 78), FONT, 0.5,
