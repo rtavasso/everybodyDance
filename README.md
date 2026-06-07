@@ -215,6 +215,16 @@ ghosts), the pitch-height meter, the loop timeline, and a live FPS / inference /
 draw HUD. A **built-in real-time synth** plays the song as it builds — no MIDI
 port, DAW, or soundfont needed.
 
+**Recommended — [uv](https://docs.astral.sh/uv/) (any OS; manages Python too):**
+```bash
+uv sync                              # creates .venv from pyproject/uv.lock
+uv run python -m tools.live --mirror # run the sandbox (no venv activation needed)
+```
+`uv sync` installs the full real-time stack and, if you don't have a compatible
+interpreter, **downloads one for you** (the project pins Python 3.10–3.12, the
+range with Intel-mac MediaPipe wheels) — so Intel-mac users don't need to install
+Python manually. `uv run pytest` runs the tests.
+
 **Windows (one shot — sets up a venv and runs):**
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\sandbox_windows.ps1
@@ -241,6 +251,9 @@ Platform notes:
 - **macOS camera permission:** first run, macOS asks your terminal for camera
   access (System Settings → Privacy & Security → Camera). If the feed is black,
   enable it there and re-run.
+- **Linux audio:** the `sounddevice` wheel bundles PortAudio on macOS/Windows; on
+  Linux install the system lib (`sudo apt install libportaudio2`) or run
+  `--no-audio` (the sandbox runs fine either way — audio degrades to silent).
 
 First run downloads the MediaPipe pose weights automatically (cached after). It
 runs on **CPU** (real-time at `--complexity 1`) on every platform — there is no

@@ -191,6 +191,21 @@ Code is platform-neutral; the issue is packaging. Verified against PyPI:
 - README platform notes (Intel-mac Python pin, camera TCC, CPU-only everywhere).
 Couldn't run on a Mac from here; validated shell syntax + marker resolution.
 
+## Entry 7 — uv support (pyproject + lockfile)
+Project had only requirements*.txt; added pyproject.toml (hatchling, package
+everybody_dance, console script `everybodydance`) + uv.lock so `uv sync` works.
+- deps include the full real-time stack so `uv sync` -> ready-to-run sandbox;
+  pytest in a default dependency-group. Carried the Intel-mac MediaPipe marker
+  split into [project.dependencies].
+- requires-python ">=3.10,<3.13": the cross-platform range with Intel-mac wheels;
+  lets uv auto-download a compatible Python (Intel-mac users skip the brew step).
+- uv unified mediapipe to 0.10.20 across all platforms in the universal lock
+  (satisfies both specs, wheels exist everywhere) -> one reproducible version.
+- Verified here: uv lock (42 pkgs), uv sync, `uv run pytest` 35/35, `uv run`
+  offline render. sounddevice needs system libportaudio on Linux (wheel bundles
+  it on mac/win); rtaudio already degrades to silent. README: uv as recommended
+  path + Linux-audio note.
+
 ## Log
 (newest at bottom)
 

@@ -1,0 +1,38 @@
+[project]
+name = "everybodydance"
+version = "0.1.0"
+description = "Music that dances to you -- body tracking in, music audibly caused by movement out."
+readme = "README.md"
+# 3.10-3.12 is the cross-platform sweet spot: Intel-mac MediaPipe (0.10.20, the
+# last x86_64 wheel) only builds for cp310-cp312, so this keeps `uv sync` and the
+# universal lock resolvable on every platform including Intel Macs.
+requires-python = ">=3.10,<3.13"
+
+dependencies = [
+    "numpy>=1.24",
+    # Pose estimation (auto-downloads weights, CPU). Intel Macs get MediaPipe's
+    # last x86_64 wheel (0.10.20); everyone else gets the latest.
+    "mediapipe==0.10.20 ; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "mediapipe>=0.10 ; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "opencv-python>=4.8",   # camera capture + the live window
+    "sounddevice>=0.4",     # built-in real-time synth (no DAW); bundles PortAudio
+    "python-rtmidi>=1.5",   # optional: MIDI out to a DAW
+    "python-osc>=1.8",      # optional: OSC out
+]
+
+[project.scripts]
+everybodydance = "run:main"
+
+[dependency-groups]
+# Synced by default by `uv sync`.
+dev = ["pytest>=7"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["everybody_dance"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
