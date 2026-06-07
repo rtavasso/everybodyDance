@@ -137,8 +137,13 @@ evolves over time; anti-repetition.
   std > 0) and `distinct_pitches ≥ 8`; no >8 s identical-output window. *(Add the
   "longest static window" metric.)*
 - [VISION] judge `liveliness ≥ 4/5`.
-**Status:** **failing** — `phantom ≈ 0.67` (pads sustain through stillness). This
-is the top known issue (§9).
+**Status:** phantom **addressed** via opt-in engine `motion_gate` (suppress new
+onsets + release held notes when the body is still); `coupling.phantom` added to
+the SLO set. Scripted 0.67→0.17, real 0.20→0.10, all SLOs green; proven by
+`tests/test_core.py::test_motion_gate_silences_stillness_when_enabled`. Remaining:
+the aliveness "longest-static-window" metric, and a "stand still" corpus clip so
+the effect is also visible in `pianoroll.png` (the scripted performer never fully
+stops, so the roll can't show it).
 
 ### G3 — Musicality (P1/P2)
 **Intent:** it always sounds musical, never random, sparse, or muddy.
@@ -227,9 +232,10 @@ person; or blend). Define it explicitly.
 **Intent:** keep replay exact so all of the above stays provable.
 **Acceptance:**
 - [BASH] run any corpus session through `tools.grade` twice → identical
-  `metrics.json` and identical emitted-event hash.
+  `session.events_hash` in `metrics.json` (the `timing` block is wall-clock and is
+  excluded by design).
 - [BASH] determinism unit tests stay green.
-**Status:** holds today; guard it in CI.
+**Status:** holds — `events_hash` verified identical across runs. Guard in CI.
 
 ## 7. Evaluation corpus (fixed inputs)
 
@@ -262,10 +268,13 @@ We do **not** need a bespoke A/B tool — the agent does the comparison:
 
 ## 9. Known issues / starting backlog
 
-1. **Phantom pads (G2) — top priority.** Ambient voices sustain through stillness
-   (`phantom ≈ 0.67`). Gate ambience to presence + recent motion. This is the
-   clearest "caused/alive" win and gives a clean before/after for the A/B loop.
-2. **`ARMS CROSSED` over-fires (G4)** on real dancing (~0.34/s). Tighten predicate.
+1. **~~Phantom pads (G2)~~ — DONE** (opt-in `motion_gate`; phantom 0.67→0.17). See
+   the worked example in WORKLOG "Entry 10".
+2. **Real-dance coupling below SLO (G1) — now top priority.** On the full
+   ambient+gesture pipeline, real-dance `coupling.score ≈ 0.31` (< 0.5 SLO).
+   Pre-existing (not caused by the gate, which actually lifts it 0.37→0.44).
+   Strengthen body-authored salience and/or revisit the threshold.
+3. **`ARMS CROSSED` over-fires (G4)** on real dancing (~0.34/s). Tighten predicate.
 3. **Jump/stomp undetectable (G4):** hip-centring removes global vertical motion;
    add a raw image-space vertical signal in the live path.
 4. **Live e2e latency unmeasured (G7):** build the probe.

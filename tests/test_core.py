@@ -115,14 +115,29 @@ def test_freeze_detected_on_stillness():
 
 # --- end to end: the coupling reads --------------------------------------
 
-def _run(script, coupling=0.4, calibrate=10, seed=0):
+def _run(script, coupling=0.4, calibrate=10, seed=0, **cfg):
     src = SyntheticPoseSource(fps=30, duration=sum(s["duration"] for s in script),
                               script=script, seed=seed)
     be = LogBackend()
     eng = Engine(src, be, EngineConfig(calibrate_s=calibrate, coupling=coupling,
-                                       seed=seed))
+                                       seed=seed, **cfg))
     eng.run()
     return eng, be
+
+
+def test_motion_gate_silences_stillness_when_enabled():
+    """Exhibit option: with motion_gate, stillness goes quiet; default stays
+    musical (the never-silent behaviour above is preserved)."""
+    script = [{"duration": 10, "tempo_hz": 2.0, "energy": 1.0},
+              {"duration": 4, "tempo_hz": 2.0, "energy": 1.0},
+              {"duration": 5, "tempo_hz": 2.0, "energy": 0.004}]   # stillness
+    _, be_off = _run(script, calibrate=10)
+    _, be_on = _run(script, calibrate=10, motion_gate=True)
+    t_end = max(e.t for e in be_off.events)
+    tail = lambda be: [e for e in be.events
+                       if e.kind == "note_on" and e.t > t_end - 3]
+    assert len(tail(be_on)) == 0          # gated quiet during stillness
+    assert len(tail(be_off)) > 0          # default keeps a held chord going
 
 
 def test_tempo_tracks_the_body():

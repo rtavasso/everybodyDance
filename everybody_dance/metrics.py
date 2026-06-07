@@ -116,6 +116,7 @@ def timing(process_ms: Sequence[float], fps: float) -> Dict:
 SLO = {
     "coupling.score": (">=", 0.35),
     "coupling.dead_zone": ("<=", 0.25),
+    "coupling.phantom": ("<=", 0.25),     # G2: no music during stillness
     "musicality.in_scale_pct": (">=", 99.0),
     "timing.headroom_pct": (">=", 0.0),
 }

@@ -263,6 +263,35 @@ Open: live e2e latency still needs the HUD path; multi-version A/B (replay throu
 engine A vs B -> two bundles -> diff/prefer) is a thin layer on top, not built;
 no real webcam session corpus yet (uses dance corpus + scripted performer).
 
+## Entry 10 — workflow run on branch claude/fix-phantom-pads (worked example)
+Ran the KICKOFF §8 workflow end-to-end as the dev+evaluator, on the top backlog
+item (G2 phantom pads). Demonstrates the doc is executable by an LLM with bash +
+screenshots.
+- Baseline (tools.grade, scripted): phantom 0.667, coupling 0.602, all prior SLOs
+  green.
+- Change: opt-in EngineConfig.motion_gate (default OFF, preserves the deliberate
+  "never silent on stillness" test). When smoothed energy stays below threshold
+  for gate_release_s: suppress new note_ons AND release held notes (falling-edge
+  flush of pending offs) so sustained pads actually stop. Enabled in the grade
+  replay (exhibit context).
+- Candidate: phantom 0.667->0.167, coupling 0.602->0.653 (gating phantom notes
+  *improves* coupling), dead_zone/in_scale/recall unchanged. Real dance isolated:
+  gate lifts coupling 0.374->0.438 and phantom 0.20->0.10 (so the gate is not the
+  cause of low real-dance coupling).
+- Gates: 57/57 tests (added test_motion_gate_silences_stillness_when_enabled);
+  determinism now checkable via session.events_hash (identical across runs; the
+  wall-clock timing block is excluded by design); added coupling.phantom to the
+  SLO set + flatten.
+- Dual metric+VISION check earned its keep: v1 (onset-suppress only) moved the
+  metric but the pianoroll was unchanged (long pads kept ringing) -> iterated to
+  v2 (release-on-gate). Proven on a still-containing synthetic session: gate ON
+  leaves 0 onsets and 0 notes sounding in the still tail vs 3/3 with gate off.
+- Honest findings logged to KICKOFF: (a) scripted performer never fully stops, so
+  the gate isn't visible in its pianoroll -> corpus needs a "stand still" clip;
+  (b) real-dance coupling ~0.31 (full pipeline) is below the G1 SLO and is now the
+  top backlog item (pre-existing, not a regression).
+Verdict: SHIP for G2; G1 real-dance coupling opened as next cycle.
+
 ## Log
 (newest at bottom)
 

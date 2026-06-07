@@ -52,7 +52,8 @@ def replay(xyz, fps, flip):
     profile = make_profile(ArrayPoseSource(xyz, fps=fps, flip_y=flip).frames(), fps)
     be_amb = LogBackend()
     eng = Engine(ArrayPoseSource(xyz, fps=fps, flip_y=flip), be_amb,
-                 EngineConfig(fps=fps, calibrate_s=0.0), profile=profile)
+                 EngineConfig(fps=fps, calibrate_s=0.0, motion_gate=True),
+                 profile=profile)
     eng.run()
 
     be_fx = LogBackend()
@@ -107,7 +108,8 @@ def compute_metrics(r, labels):
         "musicality": M.musicality(r["events"], sub.cfg.tonic, sub.cfg.scale, dur / 60),
         "recognition": M.recognition(r["fired"], labels),
         "timing": M.timing(r["proc_ms"], fps),
-        "session": {"duration_s": round(dur, 1), "frames": len(r["proc_ms"])},
+        "session": {"duration_s": round(dur, 1), "frames": len(r["proc_ms"]),
+                    "events_hash": events_hash(r["events"])},
     }
 
 
@@ -121,8 +123,16 @@ def pick_frames(r, k=6):
 def flatten(metrics):
     return {"coupling.score": metrics["coupling"]["score"],
             "coupling.dead_zone": metrics["coupling"]["dead_zone"],
+            "coupling.phantom": metrics["coupling"]["phantom"],
             "musicality.in_scale_pct": metrics["musicality"]["in_scale_pct"],
             "timing.headroom_pct": metrics["timing"].get("headroom_pct", 0.0)}
+
+
+def events_hash(events):
+    """Deterministic fingerprint of the musical output (excludes wall-clock)."""
+    import hashlib
+    ev = sorted((e.kind, e.channel, e.a, e.b, round(e.t, 4)) for e in events)
+    return hashlib.sha1(repr(ev).encode()).hexdigest()[:12]
 
 
 def main():

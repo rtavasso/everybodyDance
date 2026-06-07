@@ -35,6 +35,11 @@ class EngineConfig:
     calibrate_s: float = 20.0
     latency_compensation_s: float = 0.0
     seed: int = 0
+    # Exhibit option: go quiet when the body is still, so the music reads as
+    # caused (vs. the default ambient bed that sustains through stillness).
+    motion_gate: bool = False
+    gate_threshold: float = 0.12     # normalised energy below this counts as "still"
+    gate_release_s: float = 0.35     # stillness this long -> stop emitting new notes
 
 
 @dataclass
@@ -72,6 +77,8 @@ class Engine:
         self.readout: Optional[Readout] = None
         self._offs: List[Tuple[float, MusicEvent]] = []  # heap of (t_off, ev)
         self.traces: List[FrameTrace] = []
+        self._still_s = 0.0              # accrued stillness, for the motion gate
+        self._gated = False              # current motion-gate state
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -103,6 +110,18 @@ class Engine:
         eff = self.normalizer.effort(drivers)
         nf = self.normalizer.features(feats, eff)
         events = self.readout.step(feats, eff, nf, clk)
+        if self.cfg.motion_gate:
+            # while the body is still: emit no new notes, and on the falling edge
+            # release whatever is still sounding so stillness actually goes quiet
+            # (not just onset-quiet -- the sustained pads must stop too).
+            self._still_s = (self._still_s + feats.dt
+                             if nf.energy < self.cfg.gate_threshold else 0.0)
+            gated = self._still_s >= self.cfg.gate_release_s
+            if gated:
+                if not self._gated:
+                    self._release_all(feats.t)
+                events = [e for e in events if e.kind != "note_on"]
+            self._gated = gated
         self._emit(events, feats.t)
         self._flush_offs(feats.t)
 
@@ -125,6 +144,13 @@ class Engine:
     def _flush_offs(self, t: float) -> None:
         while self._offs and self._offs[0][0] <= t:
             _, _, off = heapq.heappop(self._offs)
+            self.backend.send(off)
+
+    def _release_all(self, t: float) -> None:
+        """Send every pending note-off now (motion gate closing -> go quiet)."""
+        while self._offs:
+            _, _, off = heapq.heappop(self._offs)
+            off.t = t
             self.backend.send(off)
 
     # -- run ---------------------------------------------------------------
