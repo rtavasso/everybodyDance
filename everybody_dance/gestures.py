@@ -43,9 +43,14 @@ class PoseCtx:
     divided by its running standing maximum, so "crouch" is person-independent.
     """
 
-    def __init__(self, xyz, vel, feats, t, vnorm=1.0):
+    def __init__(self, xyz, vel, feats, t, vnorm=1.0, root_y=0.0, root_vy=0.0):
         self.xyz, self._vel, self.feats, self.t = xyz, vel, feats, t
         self.vnorm = vnorm
+        # Global vertical of the body root (hip centre), up positive, torso units,
+        # and its velocity (torso/s). Only non-zero for sources that measure it;
+        # otherwise both stay 0.0 so the translation gestures never fire.
+        self.root_y = root_y
+        self.root_vy = root_vy
 
     def p(self, name) -> np.ndarray:
         return self.xyz[JOINT_INDEX[name]]
@@ -166,6 +171,7 @@ class GestureRecognizer:
         self._dtw = [g for g in gestures if isinstance(g, DTWGesture)]
         self._win = max(8, int(dtw_window_s * fps))
         self._prev_xyz: Optional[np.ndarray] = None
+        self._prev_root_y: Optional[float] = None # for global-vertical velocity
         self._hist: List[np.ndarray] = []        # rolling raw-xyz buffer for DTW
         self._vert_hi = 1e-6                      # running standing verticality
 
@@ -178,7 +184,12 @@ class GestureRecognizer:
         self._prev_xyz = xyz.copy()
         self._vert_hi = max(feats.verticality, self._vert_hi * 0.9995)
         vnorm = feats.verticality / self._vert_hi
-        c = PoseCtx(xyz, vel, feats, frame.t, vnorm=vnorm)
+        root_y = float(getattr(frame, "root_y", 0.0))
+        root_vy = ((root_y - self._prev_root_y) / dt
+                   if self._prev_root_y is not None else 0.0)
+        self._prev_root_y = root_y
+        c = PoseCtx(xyz, vel, feats, frame.t, vnorm=vnorm,
+                    root_y=root_y, root_vy=root_vy)
 
         events: List[GestureEvent] = []
         for g in self.gestures:
@@ -239,10 +250,22 @@ def _squat(c):
 
 
 def _arms_crossed(c):
+    # A deliberate X over the chest: the wrists swap sides and each crosses past
+    # the body midline by a clear margin, both near torso height (not down at the
+    # sides, not up overhead), and the two wrists close together (the forearms
+    # actually overlap). The old predicate only asked for crossed x and fired on
+    # incidental arm swings; the swap gap + midline crossing + vertical band +
+    # closeness together mean casual dancing no longer trips it. Paired with a
+    # longer hold below, so a fleeting swing past centre can't fire it either.
     lw, rw = c.p("l_wrist"), c.p("r_wrist")
-    swapped = (lw[0] - rw[0]) > 0.15             # wrists crossed past each other
-    chest = 0.5 * (c.p("l_shoulder")[1] + 0.0)
-    return swapped and lw[1] < chest + 0.6 and rw[1] < chest + 0.6
+    ls, rs = c.p("l_shoulder"), c.p("r_shoulder")
+    mid = 0.5 * (ls[0] + rs[0])                            # body midline (x)
+    swapped = (lw[0] - rw[0]) > 0.30 and lw[0] > mid + 0.10 and rw[0] < mid - 0.10
+    chest = 0.5 * (ls[1] + rs[1])
+    band = (lw[1] < chest and lw[1] > chest - 1.2          # wrists in the torso band
+            and rw[1] < chest and rw[1] > chest - 1.2)
+    close = abs(lw[1] - rw[1]) < 0.5 and abs(lw[0] - rw[0]) < 1.4  # forearms overlap
+    return bool(swapped and band and close)
 
 
 def _clap(c):
@@ -267,14 +290,74 @@ def _punch(c):
     return 0.0
 
 
+# Global-vertical moves. These are the *only* moves that read `c.root_vy`, the
+# raw hip-centre vertical velocity (torso/s, up positive) that survives the
+# hip-centring. Sources that don't measure it leave root_y at 0, so root_vy is
+# 0 and neither ever fires (no crashes, no false positives).
+JUMP_VY = 3.0      # torso/s upward to count as a jump take-off
+STOMP_VY = -3.0    # torso/s downward to count as a stomp / landing drop
+
+
+def _jump(c):
+    # Take-off: the body root shoots upward fast. ~0.6 torso in ~0.15 s is 4
+    # torso/s, comfortably over the threshold; an ordinary knee-flex bob stays well
+    # under it (and is anyway cancelled by hip-centring, so root_y barely moves).
+    return 1.0 if c.root_vy > JUMP_VY else 0.0
+
+
+def _stomp(c):
+    # Landing: the body root drops fast. Fires on the downward edge (the strike),
+    # which reads as a sharp negative root velocity.
+    return 1.0 if c.root_vy < STOMP_VY else 0.0
+
+
+# -- customizable library --------------------------------------------------
+# Name -> factory(cooldown) -> Gesture. The studio enables a user-chosen subset
+# by name via build_gestures(); default_gestures() is the full set, kept for
+# back-compat. Per-move hold/cooldown live in the factories so a caller only has
+# to pick a global default. JUMP/STOMP read the global-vertical signal and stay
+# inert on sources that don't measure it (root_y == 0 -> root_vy == 0).
+
+GESTURE_LIBRARY: Dict[str, Callable[..., Gesture]] = {
+    "HANDS UP": lambda cooldown=0.7: StaticPose("HANDS UP", _hands_up, hold_s=0.12, cooldown=cooldown),
+    "RAISE LEFT": lambda cooldown=0.7: StaticPose("RAISE LEFT", _raise("l"), hold_s=0.12, cooldown=cooldown),
+    "RAISE RIGHT": lambda cooldown=0.7: StaticPose("RAISE RIGHT", _raise("r"), hold_s=0.12, cooldown=cooldown),
+    "T-POSE": lambda cooldown=0.7: StaticPose("T-POSE", _t_pose, hold_s=0.30, cooldown=cooldown),
+    "SQUAT": lambda cooldown=0.7: StaticPose("SQUAT", _squat, hold_s=0.20, cooldown=cooldown),
+    # ARMS CROSSED: longer hold so only a *sustained* X fires (anti over-fire).
+    "ARMS CROSSED": lambda cooldown=0.7: StaticPose("ARMS CROSSED", _arms_crossed, hold_s=0.30, cooldown=cooldown),
+    # Motion gestures keep their own refractory (their natural rate, not the pose
+    # hold cooldown); the global `cooldown` arg is accepted but ignored for them.
+    "CLAP": lambda cooldown=0.7: HeuristicMotion("CLAP", _clap, cooldown=0.5),
+    "PUNCH": lambda cooldown=0.7: HeuristicMotion("PUNCH", _punch, cooldown=0.4),
+    "JUMP": lambda cooldown=0.7: HeuristicMotion("JUMP", _jump, cooldown=0.6),
+    "STOMP": lambda cooldown=0.7: HeuristicMotion("STOMP", _stomp, cooldown=0.6),
+}
+
+# The full default vocabulary, in performance order (drives the scripted corpus).
+DEFAULT_GESTURES: List[str] = [
+    "HANDS UP", "RAISE LEFT", "RAISE RIGHT", "T-POSE", "SQUAT",
+    "ARMS CROSSED", "CLAP", "PUNCH", "JUMP", "STOMP",
+]
+
+
+def build_gestures(names: Optional[List[str]] = None, cooldown: float = 0.7) -> List[Gesture]:
+    """Build a gesture set from the library by name (None -> the full default set).
+
+    Each named factory takes an optional `cooldown`; unknown names raise so a
+    studio config typo fails loudly rather than silently dropping a move.
+    """
+    names = DEFAULT_GESTURES if names is None else names
+    out: List[Gesture] = []
+    for n in names:
+        try:
+            factory = GESTURE_LIBRARY[n]
+        except KeyError:
+            raise KeyError(f"unknown gesture {n!r}; known: {sorted(GESTURE_LIBRARY)}")
+        out.append(factory(cooldown=cooldown))
+    return out
+
+
 def default_gestures(cooldown: float = 0.7) -> List[Gesture]:
-    return [
-        StaticPose("HANDS UP", _hands_up, hold_s=0.12, cooldown=cooldown),
-        StaticPose("RAISE LEFT", _raise("l"), hold_s=0.12, cooldown=cooldown),
-        StaticPose("RAISE RIGHT", _raise("r"), hold_s=0.12, cooldown=cooldown),
-        StaticPose("T-POSE", _t_pose, hold_s=0.30, cooldown=cooldown),
-        StaticPose("SQUAT", _squat, hold_s=0.20, cooldown=cooldown),
-        StaticPose("ARMS CROSSED", _arms_crossed, hold_s=0.25, cooldown=cooldown),
-        HeuristicMotion("CLAP", _clap, cooldown=0.5),
-        HeuristicMotion("PUNCH", _punch, cooldown=0.4),
-    ]
+    """The full built-in vocabulary (back-compat shim over build_gestures())."""
+    return build_gestures(None, cooldown=cooldown)

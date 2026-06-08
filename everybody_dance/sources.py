@@ -10,7 +10,7 @@ from typing import Iterator, Optional
 
 import numpy as np
 
-from .pose import JOINTS, PoseFrame, PoseSource, _normalise
+from .pose import JOINTS, PoseFrame, PoseSource, _normalise, _root_y
 
 # --- joint maps -----------------------------------------------------------
 
@@ -66,8 +66,10 @@ class ArrayPoseSource(PoseSource):
                 yield PoseFrame(t=t, xyz=np.zeros((len(JOINTS), 3)),
                                 visibility=np.zeros(len(JOINTS)), raw_present=False)
             else:
-                xyz = _normalise(self.xyz_seq[i], flip_y=self.flip_y)
-                yield PoseFrame(t=t, xyz=xyz, visibility=vis)
+                raw = self.xyz_seq[i]
+                xyz = _normalise(raw, flip_y=self.flip_y)
+                yield PoseFrame(t=t, xyz=xyz, visibility=vis,
+                                root_y=_root_y(raw, flip_y=self.flip_y))
             if self.realtime:
                 slack = t0 + (i + 1) * dt - time.time()
                 if slack > 0:

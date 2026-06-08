@@ -63,6 +63,12 @@ class PoseFrame:
     xyz: np.ndarray          # (J, 3), y up, hip-centred, torso-normalised
     visibility: np.ndarray   # (J,) in [0,1]
     raw_present: bool = True # False when no body was detected this frame
+    # Raw global vertical of the body root (hip centre) BEFORE hip-centring,
+    # in torso-length units, **up positive** (so it's body-scale invariant).
+    # Hip-centring removes this from `xyz`, so it's the only place pure vertical
+    # translation (jump/stomp) survives. Sources that can't measure it leave the
+    # default 0.0, which simply never fires the translation gestures.
+    root_y: float = 0.0
 
     def joint(self, name: str) -> np.ndarray:
         return self.xyz[JOINT_INDEX[name]]
@@ -84,6 +90,25 @@ def _normalise(xyz: np.ndarray, flip_y: bool = True) -> np.ndarray:
     if torso < 1e-3:
         torso = 1.0
     return xyz / torso
+
+
+def _root_y(xyz: np.ndarray, flip_y: bool = True) -> float:
+    """Raw hip-centre vertical BEFORE hip-centring, in torso units, up positive.
+
+    Mirrors :func:`_normalise`'s orientation (`flip_y`) and torso scale so the
+    value lives in the same units as the normalised skeleton. The absolute
+    baseline is arbitrary (recognisers use its velocity), only the scale matters.
+    """
+    xyz = np.asarray(xyz, float)
+    hip_y = 0.5 * (xyz[JOINT_INDEX["l_hip"], 1] + xyz[JOINT_INDEX["r_hip"], 1])
+    if flip_y:
+        hip_y = -hip_y          # image y is down; make up positive
+    hip = 0.5 * (xyz[JOINT_INDEX["l_hip"]] + xyz[JOINT_INDEX["r_hip"]])
+    shoulder = 0.5 * (xyz[JOINT_INDEX["l_shoulder"]] + xyz[JOINT_INDEX["r_shoulder"]])
+    torso = np.linalg.norm(shoulder - hip)
+    if torso < 1e-3:
+        torso = 1.0
+    return float(hip_y / torso)
 
 
 class PoseSource:
@@ -230,7 +255,8 @@ class MediaPipePoseSource(PoseSource):
             xyz = np.array([[lm[MP_INDEX[j]].x, lm[MP_INDEX[j]].y, lm[MP_INDEX[j]].z]
                             for j in JOINTS], dtype=float)
             vis = np.array([lm[MP_INDEX[j]].visibility for j in JOINTS])
-            yield PoseFrame(t=t, xyz=_normalise(xyz), visibility=vis)
+            yield PoseFrame(t=t, xyz=_normalise(xyz), visibility=vis,
+                            root_y=_root_y(xyz, flip_y=True))
 
     def close(self) -> None:  # pragma: no cover
         if self._cap is not None:

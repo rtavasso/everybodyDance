@@ -78,6 +78,13 @@ def scripted_performer(fps=FPS, with_labels=False):
     lerp = lambda a, b, n: [a + (b - a) * k / max(n - 1, 1) for k in range(n)]
     hold = lambda p, s: seq.extend([p] * int(s * fps))
     move = lambda a, b, s: seq.extend(lerp(a, b, int(s * fps)))
+    # Whole-skeleton vertical translations: the ONLY moves that exercise the raw
+    # global-vertical signal (root_y) the hip-centred skeleton otherwise removes.
+    # JUMP rises fast (~0.6 torso in 0.15 s -> ~4 torso/s, over JUMP_VY=3) then
+    # descends *gently* so the come-down doesn't trip STOMP. STOMP drops fast
+    # (~-4 torso/s, under STOMP_VY=-3) then rises gently so it doesn't trip JUMP.
+    up06 = NEU + np.array([0.0, 0.6, 0.0])     # whole body raised 0.6 torso
+    down06 = NEU + np.array([0.0, -0.6, 0.0])  # whole body dropped 0.6 torso
     hold(NEU, 1.6)
     for name, target in moves:
         if name == "PUNCH":
@@ -89,6 +96,18 @@ def scripted_performer(fps=FPS, with_labels=False):
         hold(target, .55)
         move(target, NEU, .2)
         hold(NEU, .55)
+    # JUMP: fast take-off (apex = the labelled instant), brief float, gentle land.
+    move(NEU, up06, .15)
+    labels.append((len(seq) / fps, "JUMP"))        # apex of the jump
+    hold(up06, .15)
+    move(up06, NEU, .40)                            # slow descent (< STOMP_VY)
+    hold(NEU, .55)
+    # STOMP: fast drop (landing = the labelled instant), settle, gentle recover.
+    move(NEU, down06, .15)
+    labels.append((len(seq) / fps, "STOMP"))       # landing/strike
+    hold(down06, .35)                              # settle
+    move(down06, NEU, .40)                          # slow recover (< JUMP_VY)
+    hold(NEU, .55)
     seq = np.stack(seq)
     # a gentle groove so the ambient engine has something to chew on: upper-body
     # sway + a foot bob. Both preserve the relative geometry the predicates use.
