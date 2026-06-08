@@ -188,6 +188,34 @@ run.py               CLI
 tests/test_core.py   headless proofs (entrainment, scale-safety, coupling dial)
 ```
 
+## Studio — the polished, customizable multi-stem instrument
+
+The ambitious package: a Just-Dance-inspired studio where your dance authors a
+**multi-stem loop** with **highly customizable rhythm, pitch, timbre, and
+effects** per stem, plus a game layer (recognised moves → flashes + score/combo +
+move-prompt lane).
+
+- **Rhythm** per stem: body hits (you place the onsets) or Euclidean patterns,
+  with swing/gate/density.
+- **Pitch** per stem: whole-body height → scale-snapped notes, per-stem register
+  and key.
+- **Timbre**: a 12-instrument parametric synth (pluck/pad/fm/bell/saw/square/
+  bass/sine + kick/snare/hat/noise) with ADSR, resonant filter, FM, detune.
+- **Effects** per stem + master: drive, bitcrush, resonant filter, beat-synced
+  delay, Schroeder reverb.
+- **Presets** (`default`/`house`/`ambient`/`synthwave`) + lossless JSON save/load
+  for fully custom kits.
+
+```bash
+python -m tools.render_studio --preset house            # offline demo -> mp4 + wav
+python -m tools.render_studio data/bvh/dance1_subject1.bvh --preset synthwave
+python -m tools.studio --preset ambient --mirror        # LIVE webcam studio
+```
+
+Modules: `everybody_dance/{studio_types,synth_engine,fx,stems,studio_ui,presets}.py`,
+`tools/{render_studio,studio}.py`. Built as four parallel engines against one
+type contract (`studio_types.py`); 184 dedicated tests.
+
 ## Song-builder (dance continuously, the song builds itself)
 
 No controls, no pedal. Instruments are authored in a fixed order and the phases

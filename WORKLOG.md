@@ -292,6 +292,36 @@ screenshots.
   top backlog item (pre-existing, not a regression).
 Verdict: SHIP for G2; G1 real-dance coupling opened as next cycle.
 
+## Entry 11 — STUDIO package (ambitious, multi-agent build) on branch claude/studio-package
+"ultracode": built the polished customizable instrument by fan-out orchestration.
+Defined ONE type contract (studio_types.py: RhythmConfig/PitchConfig/TimbreConfig/
+FxConfig/Mapping/StemConfig, Note/StemState, StudioUIState/MovePrompt, SynthFn/FxFn
+Protocols), then built four engines IN PARALLEL (sub-agents), each in disjoint
+files against the contract:
+- synth_engine.py: 12-instrument parametric synth (ADSR, resonant biquad, FM,
+  Karplus-Strong, additive, percussion). 83 tests.
+- fx.py: drive/bitcrush/SVF filter/beat-synced delay/Schroeder reverb; all-off =
+  identity. 19 tests.
+- stems.py: StemRack multi-stem looper (euclid + body authoring, swing, scale
+  snap, mute/solo, body->param mapping, render via injected synth/fx, to_events).
+  67 tests.
+- studio_ui.py: Just-Dance compositor (HUD+score/combo, move-prompt lane, live
+  skeleton+flashes, per-stem beat-grid rack, side meters, attract screen). 15 tests.
+Then integrated (me): presets.py (default/house/ambient/synthwave + JSON
+save/load), tools/render_studio.py (dance authors stems -> synth+fx audio + UI
+video), tools/studio.py (live webcam app with LoopPlayer realtime re-render,
+auto-advance loopers, gestures->score, body->param mapping).
+Orchestration note: the harness's "Workflow" tool wasn't present; used the Agent
+tool for parallel fan-out instead (4 background agents). Each ran only its own
+tests; I ran the full suite at integration.
+Validated: 241/241 tests; offline render works on real dance for multiple presets
+(house: dense kit; ambient: sparse pads+reverb), distinct sounds confirming
+customization; UI verified via extracted frames (score/combo, gold-move flash,
+prompt lane, stem rack). Live app imports + arg-parses (camera/audio untestable
+here; LoopPlayer degrades to silent without sounddevice).
+Open: preset tuning (euclid drum density), live e2e untested on hardware, ghost
+thumbnails in rack not drawn, gesture one-shots not yet layered into studio audio.
+
 ## Log
 (newest at bottom)
 
