@@ -139,6 +139,71 @@ def run_loop_mode(source, backend, args):
     return 0
 
 
+def run_studio_mode(source, backend, args):
+    """Live Studio: calibrate briefly, then the full multi-stem, gesture-driven
+    band plays at once -- drums/bass/keys/lead/texture -- the body shapes every
+    stem continuously and recognised moves punch in fills/drops/loops/scale &
+    timbre changes. Headless / MIDI / OSC; the on-screen Just-Dance stage + audio
+    is tools/studio_live.py."""
+    from everybody_dance.features import FeatureExtractor
+    from everybody_dance.laban import LabanEstimator
+    from everybody_dance.oscillator import EntrainedClock
+    from everybody_dance.output import LogBackend
+    from everybody_dance.personalization import Calibrator
+    from everybody_dance.studio import Studio, StudioConfig
+
+    profile = None
+    if args.profile:
+        try:
+            profile = Profile.from_json(args.profile)
+            print(f"loaded profile from {args.profile} (skipping calibration)")
+        except FileNotFoundError:
+            pass
+
+    cal = None
+    if profile is None:
+        print(f"STUDIO: calibrate by dancing for ~{args.calibrate:.0f}s ...")
+        cal = (Calibrator(), FeatureExtractor(fps=args.fps), LabanEstimator(),
+               EntrainedClock())
+    studio = None
+    start = None
+    try:
+        for frame in source.frames():
+            if start is None:
+                start = frame.t
+            if cal is not None:
+                c, fe, lab, clk = cal
+                f = fe.update(frame)
+                c.observe(f, lab.update(f, f.dt), clk.update(float(f.bounce), f.dt).tempo_hz)
+                if frame.t - start >= args.calibrate:
+                    profile = c.finalize(signature=fe.signature.summary())
+                    cal = None
+                    print("go! the band is live -- dance to shape all five stems; "
+                          "moves punch in fills/drops/loops.")
+                continue
+            if studio is None:
+                studio = Studio(backend, profile,
+                                cfg=StudioConfig(coupling=args.coupling, seed=args.seed))
+            studio.step(frame)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if studio is not None:
+            studio.panic()
+        else:
+            backend.panic()
+        source.close()
+        backend.close()
+    if isinstance(backend, LogBackend):
+        from collections import Counter
+        notes = [e for e in backend.events if e.kind == "note_on"]
+        per = Counter(e.tag for e in notes)
+        print(f"\nstopped. {len(notes)} note-ons across stems: {dict(per)}")
+    else:
+        print("\nstopped.")
+    return 0
+
+
 def run_build_mode(source, backend, args):
     """Live song-builder: calibrate briefly, then dance continuously while the
     instruments auto-advance (drums->bass->keys->lead) and the song builds.
@@ -213,8 +278,10 @@ def main(argv=None):
     ap.add_argument("--osc-port", type=int, default=9000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--demo", action="store_true", help="scripted run + report")
-    ap.add_argument("--mode", default="continuous", choices=["continuous", "loop", "build"],
-                    help="continuous instrument, or live body-looper (pedal/key)")
+    ap.add_argument("--mode", default="continuous",
+                    choices=["continuous", "loop", "build", "studio"],
+                    help="continuous instrument · body-looper (pedal) · song-builder · "
+                         "studio (full multi-stem gesture-driven band)")
     args = ap.parse_args(argv)
 
     source = build_source(args)
@@ -227,6 +294,8 @@ def main(argv=None):
         return run_loop_mode(source, backend, args)
     if args.mode == "build":
         return run_build_mode(source, backend, args)
+    if args.mode == "studio":
+        return run_studio_mode(source, backend, args)
 
     profile = None
     if args.profile:
