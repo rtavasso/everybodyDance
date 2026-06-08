@@ -112,13 +112,49 @@ def timing(process_ms: Sequence[float], fps: float) -> Dict:
             "note": "offline compute only; add camera+audio buffers for live e2e"}
 
 
-# default exhibit SLOs -> CI pass/fail
+def liveliness(events, dur: float, window_s: float = 1.0) -> Dict:
+    """Aliveness proxies (KICKOFF G2): does the musical density vary over time, and
+    how long is the longest onset-free stretch? A live arrangement varies (std > 0)
+    and never freezes into one long static block. (A *gated* stillness window is
+    expected to be onset-free -- that lowers `phantom`, the better signal -- so
+    `longest_silence_s` is informational, not a hard fail.)"""
+    ons = sorted(e.t for e in events if e.kind == "note_on")
+    if not ons or dur <= 0:
+        return {"density_std": 0.0, "mean_density": 0.0,
+                "longest_silence_s": round(float(dur), 2)}
+    nb = max(int(dur / window_s), 4)
+    counts = np.zeros(nb)
+    for t in ons:
+        counts[min(int(t / dur * nb), nb - 1)] += 1
+    gaps = np.diff([0.0] + ons + [dur])
+    return {"density_std": round(float(counts.std()), 3),
+            "mean_density": round(float(counts.mean()), 3),
+            "longest_silence_s": round(float(gaps.max()), 2)}
+
+
+def gesture_spam(fired: List[Tuple[float, str]], dur: float) -> Dict:
+    """Per-minute fire rate per move (KICKOFF G4 anti-spam: no single gesture should
+    fire > ~20x/min on real dance)."""
+    from collections import Counter
+    minutes = max(dur / 60.0, 1e-6)
+    per = {n: round(k / minutes, 2) for n, k in Counter(n for _, n in fired).items()}
+    return {"max_per_min": round(max(per.values()), 2) if per else 0.0,
+            "per_gesture_per_min": per, "total": len(fired)}
+
+
+# default exhibit SLOs -> CI pass/fail. Operators: >=, <=, >, <.
 SLO = {
     "coupling.score": (">=", 0.35),
     "coupling.dead_zone": ("<=", 0.25),
+    "coupling.phantom": ("<=", 0.25),          # G2: little/no sound during stillness
     "musicality.in_scale_pct": (">=", 99.0),
+    "liveliness.density_std": (">", 0.0),       # G2: the arrangement varies over time
+    "gesture.max_per_min": ("<=", 20.0),        # G4: no single move spams
     "timing.headroom_pct": (">=", 0.0),
 }
+
+_OPS = {">=": lambda v, t: v >= t, "<=": lambda v, t: v <= t,
+        ">": lambda v, t: v > t, "<": lambda v, t: v < t}
 
 
 def check_slo(flat: Dict[str, float]) -> Dict[str, bool]:
@@ -127,5 +163,5 @@ def check_slo(flat: Dict[str, float]) -> Dict[str, bool]:
         v = flat.get(key)
         if v is None:
             continue
-        out[key] = bool(v >= thr) if op == ">=" else bool(v <= thr)
+        out[key] = bool(_OPS[op](v, thr))
     return out

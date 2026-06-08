@@ -63,3 +63,39 @@ def test_slo_returns_plain_bools():
     assert all(slo.values())
     import json
     json.dumps(slo)                                   # must be serialisable
+
+
+def test_slo_supports_strict_operators():
+    # liveliness.density_std uses a strict ">"; 0.0 must fail, >0 must pass.
+    assert M.check_slo({"liveliness.density_std": 0.0})["liveliness.density_std"] is False
+    assert M.check_slo({"liveliness.density_std": 0.5})["liveliness.density_std"] is True
+
+
+def test_liveliness_varies_and_finds_silence():
+    # 4 onsets in the first second, then an 8s gap, then one more.
+    ons = [MusicEvent("note_on", 3, 60, 100, t=t) for t in (0.1, 0.3, 0.6, 0.9)]
+    ons.append(MusicEvent("note_on", 3, 62, 100, t=9.5))
+    lv = M.liveliness(ons, dur=10.0, window_s=1.0)
+    assert lv["density_std"] > 0.0                    # not a flat wall
+    assert lv["longest_silence_s"] >= 8.0             # the gap is found
+    # empty -> no variation, whole duration silent
+    assert M.liveliness([], dur=5.0)["density_std"] == 0.0
+
+
+def test_gesture_spam_rate_per_minute():
+    fired = [(t, "CLAP") for t in (0.0, 1.0, 2.0)] + [(0.5, "JUMP")]
+    g = M.gesture_spam(fired, dur=60.0)
+    assert g["max_per_min"] == 3.0 and g["per_gesture_per_min"]["CLAP"] == 3.0
+    assert g["total"] == 4
+    assert M.gesture_spam([], dur=60.0)["max_per_min"] == 0.0
+
+
+def test_phantom_flagged_when_sound_during_stillness():
+    # an energy gradient whose lowest bin sits below the 10th percentile, with
+    # music playing in that (near-still) bin -> a phantom.
+    move = {"energy": np.arange(10.0)}                 # 0..9; p10 ~ 0.9
+    music = {"density": np.full(10, 2.0)}              # never stops, even at rest
+    c = M.coupling(move, music)
+    assert c["phantom"] > 0.5
+    # SLO should mark phantom as failing (> 0.25)
+    assert M.check_slo({"coupling.phantom": c["phantom"]})["coupling.phantom"] is False
