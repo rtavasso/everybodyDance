@@ -263,6 +263,79 @@ Open: live e2e latency still needs the HUD path; multi-version A/B (replay throu
 engine A vs B -> two bundles -> diff/prefer) is a thin layer on top, not built;
 no real webcam session corpus yet (uses dance corpus + scripted performer).
 
+## Entry 10 — everybodyDance Studio (multi-stem, customizable, gesture-driven band)
+Built the flagship "polished package" the brief asked for: highly customizable
+rhythm/pitch/timbre/effects across **multiple stems with loopers**, an intuitive
+Just-Dance-inspired UI, and gesture/dance recognition as the precise control
+surface. Developed as a new layer ON TOP of the existing primitives (substrate,
+oscillator, features, laban, personalization, gestures, effects) so nothing in the
+prior modes broke and determinism + offline-gradability were preserved.
+
+Built via a multi-agent workflow in waves (each module landed green before the
+next depended on it):
+- **timbre.py** — customizable per-stem synth (`TimbrePreset`: osc mix, resonant
+  one-pole filter, ADSR, drive, noise; detuned unison) + `FXRack` (feedback delay,
+  Schroeder reverb, drive, bitcrush) + an 11-preset palette. This brings **timbre
+  and effects into scope** (the MIDI core deliberately left them out). numpy-only,
+  deterministic (seeded noise). 11 tests.
+- **mapping.py** — the customizability layer: a declarative, JSON-serializable
+  `MappingConfig` (per-stem `*_src` signal bindings + ~10 gesture→action bindings +
+  mood→scale) and a pure `MappingResolver`. `default()` ships a coherent 5-stem
+  Just-Dance mapping. 11 tests.
+- **gestures expansion** — JUMP/STOMP via a new `PoseFrame.root_y` (raw hip-center
+  vertical in torso units, populated by the sources; the hip-centred skeleton
+  otherwise hides global translation). Tightened ARMS CROSSED (was over-firing).
+  `build_gestures(names)`/`GESTURE_LIBRARY` registry so a config can enable a
+  named subset. Vocabulary now 10 moves; scripted_performer + grade updated;
+  grade recall 1.0 / precision 0.91 / 67 ms.
+- **stems.py + studio.py** — the engine. One `Studio.step()` runs the whole band:
+  pose → features+Effort → entrained clock → a flat signal dict → `MappingResolver`
+  → per-stem continuous targets on five stems (drums/bass/keys/lead/texture) → in-
+  scale, step-quantised MIDI. Recognised moves AND force-fired `commands` route
+  through the bindings to actions: fill/drop/breakdown/build, fx one-shots,
+  per-stem loop record/lock/toggle/clear, scale_shift, timbre_morph, stem
+  mute/solo. Returns a `StudioUI` (for the stage) + per-stem `automation` (for the
+  renderer). 25 tests.
+- **stage.py + tools/studio_live.py** — the gallery screen (mood-coloured glowing
+  dancer + motion trails + beat particles, per-stem band with VU/loop-rings/badges,
+  gold-move cards + onboarding prompts, attract loop) and the live webcam app
+  (MediaPipe with root_y, calibrate→perform, RealtimeSynth audio, keys 1..0 force
+  moves). compose_stage is headless-capable (camera=None) so the grader can view
+  frames. 9 tests.
+- **tools/render_studio.py** — the offline gradable harness: deterministic replay
+  of a synthetic dancer (groove → change → a real stillness window → recovery) with
+  a scripted command choreography exercising every gesture action; emits a
+  timbre-rendered WAV, a multi-stem piano-roll (colours by stem tag; handles the
+  5th/texture stem viz.pianoroll can't), a contact sheet, metrics.json + SLO. 6
+  tests.
+- **metrics.py** — added `liveliness` (density variation + longest silence),
+  `gesture_spam` (per-minute fire rate), the `coupling.phantom`/`liveliness.density_std`/
+  `gesture.max_per_min` SLOs, and strict `>`/`<` operators in `check_slo`.
+- **run.py --mode studio** — a headless/MIDI/OSC path for the band; **docs/CORPUS.md**
+  — the corpus manifest (KICKOFF §7).
+
+The headline fix (KICKOFF G2, the top backlog item): the **phantom gate**. New
+note onsets are suppressed when energy < `motion_floor` or no body is present
+(notes ring out via the note_off scheduler; one soft pad revoice on entering
+stillness). Result on the synthetic corpus: ~12 onsets/s in motion → **0
+onsets/s during stillness**, `coupling.phantom` 0.0 (was ≈0.67 on the ambient
+engine). A freeze now actually goes quiet instead of a static wall of pads.
+
+Validation (synthetic corpus, default 24–30 s bundle): coupling ≈ 0.59,
+phantom 0.0, in-scale 100 %, liveliness.density_std ≈ 7–9, all five stems active
+(drums/bass/keys/lead/texture), six distinct timbres in use — **all seven SLOs
+pass**. Determinism (G10): two replays → byte-identical events AND audio; only the
+wall-clock `timing` block differs (a perf measurement, as in the legacy grade).
+Full suite **124 passed** (was 56). Eyeballed the stage perform/attract frames and
+the piano-roll/contact-sheet — gallery-grade, clean cause→effect.
+
+Open: live feel + pose stability on real hardware (studio_live can't run in this
+headless box — needs a real webcam session); a timbre-aware *real-time* synth
+(the rich timbres render offline; live audio uses the simpler RealtimeSynth
+voices); a real-visitor `.session` corpus (KICKOFF §9); render_studio `--scripted`
+precision (0.71) is looser than grade's (0.91) — grade remains the recognition
+authority.
+
 ## Log
 (newest at bottom)
 

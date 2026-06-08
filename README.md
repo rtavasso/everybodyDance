@@ -7,6 +7,10 @@ not a backing track to dance over. A partner.
 > **Building on this?** Start with [`docs/KICKOFF.md`](docs/KICKOFF.md) — the
 > development design doc: product vision, the problems to solve, and design goals
 > written so each is provably met-or-not by an LLM with bash + screenshots.
+>
+> **Want the full band?** Jump to **[everybodyDance Studio](#everybodydance-studio--the-full-multi-stem-band)**
+> below — five customizable stems (rhythm, pitch, **timbre**, effects), per-stem
+> loopers, gesture-driven fills/drops/loops, and a gallery Just-Dance stage.
 
 Body tracking in, music out, where the music is audibly *caused* by the movement
 and feels musical the whole time. Timbres are out of scope: the output is
@@ -187,6 +191,62 @@ everybody_dance/
 run.py               CLI
 tests/test_core.py   headless proofs (entrainment, scale-safety, coupling dial)
 ```
+
+## everybodyDance Studio — the full multi-stem band
+
+The flagship instrument: **every stem plays at once** and your body shapes them
+all. Five stems — **drums, bass, keys, lead, texture** — each with its own
+rhythm, pitch, **timbre**, and effects, plus a per-stem **looper**. Recognised
+dance moves punch in salient, repeatable changes (fills, drops, breakdowns,
+builds, loop record/lock, scale shifts, timbre morphs). It is the synthesis of
+the song-builder, the body-looper, and the gesture layer into one polished
+package — and unlike the MIDI core above, **timbre and effects are first-class
+and customizable** here (a small built-in synth + FX rack).
+
+Three entry points:
+
+```bash
+# 1) The gallery instrument: webcam + the Just-Dance stage + zero-setup audio.
+uv run python -m tools.studio_live --mirror        # keys 1..0 force any of the 10 moves
+# 2) Headless / MIDI / OSC -- drive your DAW with the whole band:
+uv run python run.py --mode studio --source webcam --backend midi --coupling 0.4
+# 3) Offline, deterministic, gradable -- pictures + WAV + metrics + SLO:
+uv run python -m tools.render_studio               # --scripted  --judge  --seconds 24
+```
+
+**Customizable everything.** A declarative `MappingConfig` (JSON) binds movement
+signals and gestures to per-stem targets and discrete actions — edit it and the
+instrument changes (`tools.studio_live --mapping my_map.json`):
+
+| layer | what you customize | where |
+|---|---|---|
+| **rhythm** | which movement signal drives each stem's density (core→drums, limbs→lead…) | `mapping.py` → `stems.py` |
+| **pitch** | per-stem register/octave + the signal that picks the scale index | `mapping.py`, `substrate.py` |
+| **timbre** | per-stem synth preset (osc mix, resonant filter, ADSR, drive) + movement automation | `timbre.py` |
+| **effects** | per-stem reverb/delay/drive sends + a global FX rack (delay, reverb, drive, bitcrush) | `timbre.py` |
+| **gestures** | which recognised move triggers which action (fill / drop / loop / scale / timbre-morph…) | `mapping.py`, `gestures.py` |
+
+**Caused & alive (the phantom gate).** New note onsets are suppressed when the
+body is still or absent — a freeze actually goes quiet (notes ring out via the
+note_off scheduler) instead of the grid manufacturing phantom hits. Measured on
+the synthetic corpus: ~12 onsets/s in motion → **0 onsets/s during stillness**, so
+`coupling.phantom` is 0.0 (the KICKOFF G2 "caused & alive" win).
+
+**Provable.** `tools/render_studio.py` replays a synthetic dancer deterministically
+and emits a gradable bundle — a multi-stem piano-roll, a contact sheet of
+move-flashes, `metrics.json` + SLO, and a **timbre-rendered `music.wav`**. The
+default bundle: coupling ≈ 0.59, phantom 0.0, in-scale 100 %, all five stems
+active, six distinct timbres — **all seven SLOs pass**. Same dance + same moves →
+byte-identical events and audio (determinism is preserved end to end).
+
+The gallery screen (`stage.py`, drawn live by `tools/studio_live.py` and offline
+for grading) shows a mood-coloured glowing dancer with motion trails + beat
+particles, a per-stem band (VU, loop-onset rings, REC/LOOP/MUTE badges, the
+current timbre), Just-Dance "gold-move" gesture cards with onboarding prompts, and
+a self-animating attract loop for the empty room.
+
+Modules: `everybody_dance/{studio,stems,timbre,mapping,stage}.py`,
+`tools/{render_studio,studio_live}.py`. Corpus + checks: [`docs/CORPUS.md`](docs/CORPUS.md).
 
 ## Song-builder (dance continuously, the song builds itself)
 

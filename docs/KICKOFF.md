@@ -137,8 +137,11 @@ evolves over time; anti-repetition.
   std > 0) and `distinct_pitches ≥ 8`; no >8 s identical-output window. *(Add the
   "longest static window" metric.)*
 - [VISION] judge `liveliness ≥ 4/5`.
-**Status:** **failing** — `phantom ≈ 0.67` (pads sustain through stillness). This
-is the top known issue (§9).
+**Status:** **fixed in the Studio** — the phantom gate suppresses new onsets when
+still/absent (notes ring out), giving `coupling.phantom == 0.0` on the synthetic
+corpus (≈12 onsets/s in motion → 0/s during stillness), with `liveliness.density_std`
+> 0. `coupling.phantom ≤ 0.25` is now a hard SLO (`metrics.py`), proven by
+`tools/render_studio.py`. (The legacy ambient engine still shows ≈0.67.)
 
 ### G3 — Musicality (P1/P2)
 **Intent:** it always sounds musical, never random, sparse, or muddy.
@@ -160,8 +163,10 @@ image-space vertical (hip-centring hides them today); reduce false fires.
 - [BASH] on real-dance corpus: no single gesture fires > 20×/min (anti-spam).
   *(Add a per-minute false-fire metric.)*
 - [VISION] judge `gesture_legibility ≥ 4/5`.
-**Status:** recall 1.0 / precision 0.89 / 67 ms on scripted; `ARMS CROSSED`
-over-fires on real dance (≈ 0.34/s) — tune.
+**Status:** recall 1.0 / precision ≈ 0.91 / 67 ms on scripted; **JUMP & STOMP
+added** via raw image-space vertical (`PoseFrame.root_y`), `ARMS CROSSED`
+tightened, vocabulary now 10 moves with a `build_gestures()` registry. Anti-spam
+metric (`gesture.max_per_min ≤ 20`) added to the SLO set.
 
 ### G5 — Gallery-grade visuals (P3)
 **Intent:** the screen is beautiful and legible from across a room.
@@ -173,7 +178,12 @@ state.
   frames extracted from a `--record` of the live app.
 - [BASH] renders at target resolution without dropping below the FPS floor (G7).
 - [HUMAN] design review sign-off for the gallery.
-**Status:** debug visuals only; large gap.
+**Status:** **gallery stage built** (`everybody_dance/stage.py`) — mood-coloured
+glowing dancer with motion trails + beat particles, a per-stem band (VU, loop
+rings, REC/LOOP/MUTE badges, timbre names), Just-Dance gold-move cards + an
+attract loop. Drawn live by `tools/studio_live.py` and headlessly for grading
+(`compose_stage(None, ui, perf)`). Aesthetics now [VISION]-gradable; real
+gallery-hardware sign-off remains the [HUMAN] gate.
 
 ### G6 — Zero-instruction onboarding (P3)
 **Intent:** a first-timer understands within ~5 s, no text.
@@ -262,16 +272,20 @@ We do **not** need a bespoke A/B tool — the agent does the comparison:
 
 ## 9. Known issues / starting backlog
 
-1. **Phantom pads (G2) — top priority.** Ambient voices sustain through stillness
-   (`phantom ≈ 0.67`). Gate ambience to presence + recent motion. This is the
-   clearest "caused/alive" win and gives a clean before/after for the A/B loop.
-2. **`ARMS CROSSED` over-fires (G4)** on real dancing (~0.34/s). Tighten predicate.
-3. **Jump/stomp undetectable (G4):** hip-centring removes global vertical motion;
-   add a raw image-space vertical signal in the live path.
-4. **Live e2e latency unmeasured (G7):** build the probe.
-5. **Debug-only visuals (G5):** needs a real gallery visual identity.
-6. **No soak/presence/edge harness (G8/G9).**
+1. ✅ **Phantom pads (G2) — DONE in the Studio.** The phantom gate suppresses new
+   onsets when still/absent → `phantom 0.0` on the synthetic corpus (was ≈0.67).
+2. ✅ **`ARMS CROSSED` over-fires (G4) — tightened** (midline-cross gate + longer
+   hold). Re-verify the rate on a real-dance corpus when one is fetched.
+3. ✅ **Jump/stomp (G4) — DONE.** Added via `PoseFrame.root_y` (raw vertical, torso
+   units), populated by the sources + the live MediaPipe path.
+4. **Live e2e latency unmeasured (G7):** still needs a probe on the live path.
+5. ✅ **Visuals (G5) — gallery stage built** (`stage.py`); real-hardware sign-off
+   is still the [HUMAN] gate.
+6. **No soak/presence/edge harness (G8/G9)** — partially: the Studio handles the
+   absent-body (attract) and stillness cases; a soak/edge harness is still open.
 7. **No real-visitor session corpus (G7 corpus).**
+8. **Timbre-aware *real-time* synth:** the rich timbres render offline
+   (`render_studio`); the live app uses the simpler `RealtimeSynth` voices.
 
 ## 10. Non-goals (explicitly out of scope)
 
