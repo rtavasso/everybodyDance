@@ -152,10 +152,10 @@ class Stage:
             a = f.alpha(ui.t)
             if a <= 0:
                 continue
-            prog = 1.0 - a
+            prog = float(np.clip(1.0 - a, 0.0, 1.0))
             ov = canvas.copy()
             for k in range(3):
-                r = int((prog * 1.1 + 0.14 * k) * min(w, h) * 0.62) + 8
+                r = max(int((prog * 1.1 + 0.14 * k) * min(w, h) * 0.62) + 8, 1)
                 cv2.circle(ov, (cx, cy), r, f.color, max(2, int(5 * a)),
                            cv2.LINE_AA)
             cv2.addWeighted(ov, 0.5 * a, canvas, 1 - 0.5 * a, 0, canvas)
@@ -385,6 +385,14 @@ class Stage:
         if g.streak_tier:
             cv2.putText(canvas, g.streak_tier, (bx + bw + 10, by + bh + 1),
                         FONT, 0.45, tcol, 1, cv2.LINE_AA)
+        # the skill loop made visible: how locked to the beat the dancer is.
+        gv = float(np.clip(getattr(g, "groove", 0.5), 0, 1))
+        gy = by + bh + 6
+        gcol = (120, 230, 160) if gv >= 0.6 else (140, 170, 190)
+        cv2.rectangle(canvas, (bx, gy), (bx + bw, gy + 4), (50, 46, 56), 1)
+        cv2.rectangle(canvas, (bx, gy), (bx + int(bw * gv), gy + 4), gcol, -1)
+        cv2.putText(canvas, "GROOVE", (bx - 64, gy + 6), FONT, 0.38,
+                    gcol, 1, cv2.LINE_AA)
 
     def _draw_challenge(self, canvas, ui):
         """The gold-move card: announce ('GET READY'), then the timed window."""

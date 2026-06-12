@@ -40,7 +40,9 @@ def _corr(a: np.ndarray, b: np.ndarray) -> float:
 
 def coupling(move: Dict[str, np.ndarray], music: Dict[str, np.ndarray],
              still_mask: Optional[np.ndarray] = None,
-             still_density: Optional[np.ndarray] = None) -> Dict:
+             still_density: Optional[np.ndarray] = None,
+             dead_energy: Optional[np.ndarray] = None,
+             dead_density: Optional[np.ndarray] = None) -> Dict:
     """Correlation matrix between movement and music feature series + summary.
 
     ``still_mask`` (binned bool) marks the bins the engine's own stillness gate
@@ -52,7 +54,12 @@ def coupling(move: Dict[str, np.ndarray], music: Dict[str, np.ndarray],
     ``still_density`` optionally replaces ``music['density']`` for the phantom
     check only -- pass a density series with move-caused one-shots (fx)
     excluded, since phantom exists to catch the GRID manufacturing notes
-    without movement, not a deliberate punch from a standing-still dancer."""
+    without movement, not a deliberate punch from a standing-still dancer.
+
+    ``dead_energy``/``dead_density`` optionally provide a COARSER binning for
+    the dead-zone check: a committed groove at a low level legitimately leaves
+    fine bins empty between hits; the honest dead zone is "moving hard and
+    nothing sounds for the better part of a second"."""
     matrix = {m: {k: round(_corr(move[k], music[m]), 3) for k in move} for m in music}
     # each musical dimension should be explained by *some* movement signal
     per_music = {m: max((abs(v) for v in row.values()), default=0.0)
@@ -61,12 +68,14 @@ def coupling(move: Dict[str, np.ndarray], music: Dict[str, np.ndarray],
 
     energy = move.get("energy", np.zeros(1))
     density = music.get("density", np.zeros(1))
-    hi = energy > np.percentile(energy, 66) if energy.size else np.array([False])
+    de = energy if dead_energy is None else np.asarray(dead_energy)
+    dd = density if dead_density is None else np.asarray(dead_density)
+    hi = de > np.percentile(de, 66) if de.size else np.array([False])
     if still_mask is not None:
         lo = np.asarray(still_mask, bool)
     else:
         lo = energy < np.percentile(energy, 10) if energy.size else np.array([False])
-    dead = float(np.mean(density[hi] == 0)) if hi.any() else 0.0      # move, no music
+    dead = float(np.mean(dd[hi] == 0)) if hi.any() else 0.0          # move, no music
     pd = density if still_density is None else np.asarray(still_density)
     phantom = float(np.mean(pd[lo] > 0)) if lo.any() else 0.0         # music, no move
     return {"matrix": matrix, "score": score, "dead_zone": round(dead, 3),
@@ -190,6 +199,9 @@ SLO = {
     "game.sections_visited": (">=", 3.0),       # the song arc actually travels
     "game.stems_unlocked": (">=", 5.0),         # the full band gets earned
     "game.combos_fired": (">=", 1.0),           # combos are reachable + fire
+    "rhythm.on_grid_pct": (">=", 95.0),         # drums land on the latched grid
+    "rhythm.bar_similarity": (">=", 0.5),       # a beat exists only if it repeats
+    "rhythm.tempo_relocks": ("<=", 4.0),        # tempo moves deliberately, rarely
 }
 
 _OPS = {">=": lambda v, t: v >= t, "<=": lambda v, t: v <= t,

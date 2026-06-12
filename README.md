@@ -276,12 +276,32 @@ per-move **salience cap** (a move made constantly isn't a salient move), a
 **dwell-debounced stillness gate** (a slow transition isn't a freeze), and a
 phantom metric judged against the gate's actual state.
 
+**The groove backbone (`groove.py`) — why it sounds like music.** The body
+does not micro-manage note placement; it **commits musical structure at
+musical boundaries and modulates within it**. Tempo is estimated from your
+pulse (bounce-peak intervals) but **latched to an integer BPM** — it re-locks
+only after a sustained shift, only at a bar line, and every note is scheduled
+at an exact grid time. Drums play **curated groove styles** (four-on-the-
+floor / backbeat / breaks / half-time — your Dance DNA picks one) at a
+density *level committed per bar* from what you actually danced, slewed one
+level per bar; your energy drives the velocities inside the bar, never the
+pattern. Bass locks to the kick on chord roots; keys comp on style slots; the
+lead is a **motif** your height contour authors — chord tones on strong
+beats, stepwise elsewhere — that persists, mutates one note per phrase, and
+re-roots with the harmony. And it's **skill-based**: a rhythmic-coherence
+score (your bounce peaks vs the latched grid, shown as the GROOVE meter)
+gates the richness — dance off the pulse and the kit stays plain and quiet;
+lock in and you earn the backbeat, the ghosts, the full motif, the arps, and
+the path to PEAK. Provable: `rhythm.*` SLOs (drum onsets ≥95 % within 12 ms
+of the grid, bar-vs-modal-groove similarity ≥0.5, ≤4 tempo re-locks).
+
 **Sonic moves that push further** (all deterministic): a FIRE+ streak blooms
 lead notes into ascending chord-tone **arpeggio runs**; reaching PEAK fires
 **THE LIFT** — the whole world transposes up two semitones, locked loops
 included, and settles back as you cool; the texture lane plays **polyrhythms**
-(3/5-pulse euclidean against the 4/4, phasing per bar); fills get 32nd-note
-hat ratchets; truly freezing earns a soft falling **wind-down** before the
+(3/5-pulse euclidean against the 4/4, phasing per bar); fills are budgeted
+like a drummer's (about one per phrase) and gesture one-shots quantize to the
+next 16th; truly freezing earns a soft falling **wind-down** before the
 silence. On screen: a section-tinted aurora, shockwave rings on every big hit,
 golden confetti on PERFECT!, and a dancer who literally gilds gold at GOLD
 streak.

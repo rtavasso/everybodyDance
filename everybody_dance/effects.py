@@ -42,7 +42,9 @@ class Flash:
     big: bool = False
 
     def alpha(self, t: float) -> float:
-        return max(0.0, 1.0 - (t - self.t0) / self.ttl)
+        # clamped both ways: a quantized fx flash may carry a t0 slightly in
+        # the future (it fires on the next grid step).
+        return min(1.0, max(0.0, 1.0 - (t - self.t0) / self.ttl))
 
 
 class EffectEngine:
@@ -51,14 +53,21 @@ class EffectEngine:
         self.sub = substrate
         self.flashes: List[Flash] = []
         self.log: List[Tuple[float, str]] = []
+        self.quantize = None     # optional t -> t hook (studio snaps to grid)
 
     # -- public ------------------------------------------------------------
 
     def trigger(self, name: str, t: float) -> None:
+        if self.quantize is not None:
+            t = float(self.quantize(t))      # one-shots land in the pocket
         getattr(self, "_fx_" + name.lower().replace(" ", "_").replace("-", "_"),
                 self._fx_default)(t)
         color, big = STYLE.get(name, DEFAULT_STYLE)
-        self.flashes.append(Flash(name, color, t, 0.5 if big else 0.4, big))
+        # one flash per moment per name: the caller may already have flashed
+        # this move (studio does); a duplicate is visual noise.
+        if not any(f.name == name and abs(f.t0 - t) < 0.35
+                   for f in self.flashes):
+            self.flashes.append(Flash(name, color, t, 0.5 if big else 0.4, big))
         self.log.append((t, name))
 
     def active_flashes(self, t: float) -> List[Flash]:

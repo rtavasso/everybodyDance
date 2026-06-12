@@ -253,3 +253,4 @@ class GameUI:
     identity_name: str = ""
     identity_tagline: str = ""
     identity_color: Tuple[int, int, int] = (220, 220, 235)
+    groove: float = 0.5              # rhythmic-coherence score (the skill loop)

@@ -220,10 +220,11 @@ def beat_s_to_dur(dur_units: float, beat_s: float) -> float:
     return float(dur_units)
 
 
-def revoice_pad(stem: Stem, sub: Substrate, sig: dict, beat_s: float
-                ) -> List[MusicEvent]:
+def revoice_pad(stem: Stem, sub: Substrate, sig: dict, beat_s: float,
+                dur_s: float = None) -> List[MusicEvent]:
     """One soft sustained chord for keys/texture -- used as the single
-    stillness-onset allowance and as the per-bar pad revoice."""
+    stillness-onset allowance and as the per-bar pad revoice. ``dur_s``
+    overrides the legacy fixed duration with a tempo-aware one."""
     openness = float(np.clip(sig.get("openness", 0.5), 0, 1))
     weight = float(np.clip(sig.get("weight", 0.3), 0, 1))
     spread = 0.3 + 0.7 * openness
@@ -235,4 +236,5 @@ def revoice_pad(stem: Stem, sub: Substrate, sig: dict, beat_s: float
         stem.role.lo, stem.role.hi) for k, d in enumerate(tones)})
     vel = int(np.clip(28 + 40 * weight, 1, 90))
     return [MusicEvent("note_on", stem.channel, n, vel,
-                       dur=DUR[stem.name], tag=stem.name) for n in notes]
+                       dur=dur_s if dur_s is not None else DUR[stem.name],
+                       tag=stem.name) for n in notes]

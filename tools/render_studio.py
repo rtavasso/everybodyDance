@@ -189,11 +189,7 @@ def replay(xyz: np.ndarray, fps: float, flip: bool, *, scripted: bool,
     per_frame: List[Tuple[np.ndarray, List[Flash]]] = []
     fired: List[Tuple[float, str]] = []
     proc_ms: List[float] = []
-    mv = {k: [] for k in ("energy", "core", "limb", "open", "comh", "norm_e", "gated")}
-    # the active (tonic, scale) over time -- scale_shift / ECLIPSE move it, and
-    # the in-scale metric judges each note against the scale active at its t.
-    segments: List[Tuple[float, int, str]] = [
-        (0.0, studio.sub.cfg.tonic, studio.sub.cfg.scale)]
+    mv = {k: [] for k in ("energy", "core", "limb", "open", "comh", "norm_e", "gated", "groove")}
 
     for i, fr in enumerate(frames):
         cmds = list(commands_at.get(i, []))
@@ -209,9 +205,7 @@ def replay(xyz: np.ndarray, fps: float, flip: bool, *, scripted: bool,
         mv["comh"].append(f.com_height)
         mv["norm_e"].append(float(out.ui.energy))
         mv["gated"].append(1.0 if out.ui.still else 0.0)
-
-        if (studio.sub.cfg.tonic, studio.sub.cfg.scale) != segments[-1][1:]:
-            segments.append((fr.t, studio.sub.cfg.tonic, studio.sub.cfg.scale))
+        mv["groove"].append(float(studio.coherence.score))
 
         autom_timeline.append((fr.t, out.automation))
         per_frame.append((out.ui.live_xyz, [Flash(fl.name, fl.color, fl.t0,
@@ -232,7 +226,8 @@ def replay(xyz: np.ndarray, fps: float, flip: bool, *, scripted: bool,
 
     return dict(studio=studio, events=list(be.events), fired=fired,
                 per_frame=per_frame, proc_ms=proc_ms, mv=mv, fps=fps, dur=dur,
-                autom=autom_timeline, sub=studio.sub, segments=segments)
+                autom=autom_timeline, sub=studio.sub,
+                segments=list(studio.key_log))
 
 
 # -- timbre-aware WAV render ------------------------------------------------
@@ -499,6 +494,42 @@ def compute_metrics(r, labels) -> dict:
         if e.kind == "note_on" and e.tag != "fx":
             counts_nonfx[min(int(e.t / dur * nb), nb - 1)] += 1
 
+    # rhythm: the groove must be PROVABLY tight. on_grid = drum onsets within
+    # 12 ms of a logged grid-emission time; bar_similarity = mean Jaccard of
+    # consecutive bars' drum slot patterns (a beat exists only if it repeats).
+    g = r["studio"]
+    grid = list(g.grid_log)
+    drum_ts = [e.t for e in events if e.kind == "note_on" and e.channel == 10]
+    if grid and drum_ts:
+        gt = np.array([t for _, t in grid])
+        gs = np.array([s for s, _ in grid])
+        idx = np.clip(np.searchsorted(gt, drum_ts), 1, len(gt) - 1)
+        near = np.where(np.abs(gt[idx] - drum_ts) < np.abs(gt[idx - 1] - drum_ts),
+                        idx, idx - 1)
+        err = np.abs(gt[near] - np.array(drum_ts))
+        on_grid_pct = float(np.mean(err <= 0.012) * 100.0)
+        bars: dict = {}
+        for k in gs[near]:
+            bars.setdefault(int(k) // 16, set()).add(int(k) % 16)
+        # similarity to the MODAL bar: fills/breakdowns are sanctioned
+        # per-gesture variation, so the claim is "there is a home groove the
+        # bars orbit", not "every bar equals the last".
+        pats = [frozenset(v) for v in bars.values()]
+        if pats:
+            modal = max(sorted(pats, key=sorted), key=pats.count)
+            sims = [len(p & modal) / max(len(p | modal), 1) for p in pats]
+            bar_similarity = float(np.mean(sims))
+        else:
+            bar_similarity = 0.0
+    else:
+        on_grid_pct, bar_similarity = 0.0, 0.0
+    rhythm = {"bpm": float(g.latch.bpm), "tempo_relocks": int(g.latch.relocks),
+              "on_grid_pct": round(on_grid_pct, 1),
+              "bar_similarity": round(bar_similarity, 3),
+              "groove_score_mean": round(float(np.mean(r["mv"]["groove"])), 3)
+              if r["mv"].get("groove") else None,
+              "style": g.style, "swing": g.swing}
+
     sub = r["sub"]
     # per-stem activity (note_on counts per stem tag) -> proves multi-stem alive.
     per_stem = Counter(e.tag for e in events
@@ -529,15 +560,61 @@ def compute_metrics(r, labels) -> dict:
                             "kit": st.identity.kit_name,
                             "progression": list(st.identity.progression)}
 
+    # coarser bins (~0.75 s) for the dead-zone check: a committed groove at a
+    # low level is legitimately sparse on the 0.25 s grid.
+    nb2 = max(int(dur / 0.75), 2)
+    de = M._bin(times, r["mv"]["energy"], nb2, dur)
+    dd = np.zeros(nb2)
+    for e in events:
+        if e.kind == "note_on":
+            dd[min(int(e.t / dur * nb2), nb2 - 1)] += 1
+
+    cpl = M.coupling(move, music, still_mask=still_mask,
+                     still_density=counts_nonfx,
+                     dead_energy=de, dead_density=dd)
+    # Timescale-honest coupling (the project thesis: each timescale routed to
+    # the layer that moves at that speed). Density is now COMMITTED structure
+    # that the body drives at bar rate -- correlate it on ~1.5 s bins; the
+    # fast lanes (velocity, pitch) stay fine-grained. The score averages each
+    # musical dimension at its own timescale.
+    nbar = max(int(dur / 1.5), 4)
+    move_bar = {k: M._bin(times, r["mv"][kk], nbar, dur)
+                for k, kk in (("energy", "energy"), ("limb", "limb"),
+                              ("core", "core"), ("height", "comh"),
+                              ("openness", "open"))}
+    dens_bar = np.zeros(nbar)
+    for e in events:
+        if e.kind == "note_on":
+            dens_bar[min(int(e.t / dur * nbar), nbar - 1)] += 1
+    cpl["matrix"]["density_bar"] = {k: round(M._corr(v, dens_bar), 3)
+                                    for k, v in move_bar.items()}
+    # the kick's velocity lane, masked to bars that contain kicks: its pattern
+    # base is constant, so this series IS the body's dynamics modulation (the
+    # most audible coupling channel of the committed-groove design).
+    kcnt, ksum = np.zeros(nbar), np.zeros(nbar)
+    for e in events:
+        if e.kind == "note_on" and e.channel == 10 and e.a == 36:
+            b = min(int(e.t / dur * nbar), nbar - 1)
+            kcnt[b] += 1
+            ksum[b] += e.b
+    kmask = kcnt > 0
+    if kmask.sum() >= 4:
+        kvb = ksum[kmask] / kcnt[kmask]
+        cpl["matrix"]["kick_vel_bar"] = {
+            k: round(M._corr(v[kmask], kvb), 3) for k, v in move_bar.items()}
+    per_music = {m: max((abs(v) for v in row.values()), default=0.0)
+                 for m, row in cpl["matrix"].items() if m != "density"}
+    cpl["score"] = round(float(np.mean(list(per_music.values()))), 3)
+
     return {
-        "coupling": M.coupling(move, music, still_mask=still_mask,
-                               still_density=counts_nonfx),
+        "coupling": cpl,
         "musicality": M.musicality(events, sub.cfg.tonic, sub.cfg.scale, dur / 60,
                                    segments=r.get("segments")),
         "liveliness": M.liveliness(events, dur),
         "recognition": M.recognition(r["fired"], labels),
         "gesture": M.gesture_spam(r["fired"], dur),
         "timing": M.timing(r["proc_ms"], fps),
+        "rhythm": rhythm,
         "game": game,
         "stems": {"per_stem_onsets": per_stem,
                   "active_stems": int(sum(1 for v in per_stem.values() if v > 0)),
@@ -564,6 +641,10 @@ def flatten(metrics) -> dict:
         out["game.sections_visited"] = float(metrics["game"]["sections_visited"])
         out["game.stems_unlocked"] = float(metrics["game"]["stems_unlocked"])
         out["game.combos_fired"] = float(metrics["game"]["combos_fired"])
+    if "rhythm" in metrics:
+        out["rhythm.on_grid_pct"] = float(metrics["rhythm"]["on_grid_pct"])
+        out["rhythm.bar_similarity"] = float(metrics["rhythm"]["bar_similarity"])
+        out["rhythm.tempo_relocks"] = float(metrics["rhythm"]["tempo_relocks"])
     return out
 
 

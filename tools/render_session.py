@@ -136,8 +136,7 @@ def run_session(pose_path: str, video: Optional[str], out_dir: str,
     autom: List[Tuple[float, dict]] = []
     fired: List[Tuple[float, str]] = []
     proc_ms: List[float] = []
-    mv = {k: [] for k in ("energy", "core", "limb", "open", "comh", "norm_e", "gated")}
-    segments = [(0.0, studio.sub.cfg.tonic, studio.sub.cfg.scale)]
+    mv = {k: [] for k in ("energy", "core", "limb", "open", "comh", "norm_e", "gated", "groove")}
     stills = []
     per_frame = []
 
@@ -165,8 +164,7 @@ def run_session(pose_path: str, video: Optional[str], out_dir: str,
         mv["comh"].append(f.com_height)
         mv["norm_e"].append(float(out.ui.energy))
         mv["gated"].append(1.0 if out.ui.still else 0.0)
-        if (studio.sub.cfg.tonic, studio.sub.cfg.scale) != segments[-1][1:]:
-            segments.append((fr.t, studio.sub.cfg.tonic, studio.sub.cfg.scale))
+        mv["groove"].append(float(studio.coherence.score))
         autom.append((fr.t, out.automation))
         per_frame.append((out.ui.live_xyz, list(out.ui.flashes)))
         seen = set()
@@ -198,7 +196,7 @@ def run_session(pose_path: str, video: Optional[str], out_dir: str,
 
     r = dict(studio=studio, events=list(be.events), fired=fired,
              per_frame=per_frame, proc_ms=proc_ms, mv=mv, fps=fps, dur=dur,
-             autom=autom, sub=studio.sub, segments=segments)
+             autom=autom, sub=studio.sub, segments=list(studio.key_log))
     metrics = compute_metrics(r, labels=None)
     slo = M.check_slo({k: v for k, v in _flat(metrics).items()})
     json.dump(metrics, open(os.path.join(out_dir, "metrics.json"), "w"),

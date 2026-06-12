@@ -26,6 +26,7 @@ from typing import List, Optional
 
 import numpy as np
 
+from . import groove as G
 from . import stems as stemlib
 from .effects import STYLE, EffectEngine, Flash
 from .features import FeatureExtractor
@@ -147,6 +148,8 @@ class Studio:
             self.sub.cfg.scale = self.identity.scale
             self.sub._scale = SCALES[self.identity.scale]
             self.sub.cfg.harmonic_field = list(self.identity.progression)
+        # exact (t, tonic, scale) timeline -- the in-scale metric's authority.
+        self.key_log: List = [(0.0, self.sub.cfg.tonic, self.sub.cfg.scale)]
 
         # Upstream signal stack.
         self.features = FeatureExtractor()
@@ -175,6 +178,28 @@ class Studio:
         self.max_streak_tier = 0
         self._move_times: dict = {}              # move -> accepted fire times
 
+        # The groove backbone: latched tempo, committed bar plans, the motif,
+        # and the rhythmic-coherence skill loop (see groove.py).
+        self.latch = G.TempoLatch(initial_hz=profile.char_tempo_hz)
+        self.coherence = G.RhythmCoherence()
+        self.style = self.identity.style if self.identity else "backbeat"
+        self.swing = G.SWING.get(self.style, 0.08)
+        self.writer = G.MotifWriter(
+            seed=self.cfg.seed + (self.identity.tonic if self.identity else 0))
+        self.fx.quantize = self._quantize_fx     # fx one-shots land on a 16th
+        self.grid_log: List = []                 # (abs_step, emit_t) for metrics
+        self._next_step_t: Optional[float] = None
+        self._contour: List[float] = []          # recent height contour (~1 bar)
+        self._vel_bias = 0.0
+        self._dens_acc: dict = {}                # per-stem bar-density average
+        self._levels: dict = {}
+        self._prev_levels: dict = {}
+        self._drum_bar = None
+        self._bass_bar = None
+        self._keys_bar: dict = {}
+        self._tex_bar: set = set()
+        self._lead_on = False
+
         # Loop grid + scheduler state.
         self._abs_step = -1
         self.master_step = 0
@@ -187,7 +212,8 @@ class Studio:
         self._prompt_idx = 0
 
         # transient gesture windows (in abs_step units), like looper.py
-        self._fill_until = -1
+        # (_fill_until very negative so the first fill clears its budget)
+        self._fill_until = -(10 ** 9)
         self._build_until = -1
         self._drop_until = -1
         self._breakdown_until = -1
@@ -209,7 +235,22 @@ class Studio:
         nf = self.norm.features(feats, eff)
         sig = self._signal(feats, eff, nf)
         present = bool(feats.present)
-        self.bpm = clk.bpm
+
+        # tempo: estimates only -- the latch decides, at bar lines. The pulse
+        # listener's inter-peak estimate leads (robust on real bodies); the
+        # entrained oscillator is the fallback before enough peaks exist.
+        self.coherence.update(float(feats.bounce), frame.t, self.latch.beat_s,
+                              feats.dt)
+        if present:
+            est_hz = self.coherence.tempo_hz
+            if est_hz is None and clk.confidence > 0.25:
+                est_hz = clk.tempo_hz
+            if est_hz is not None:
+                self.latch.observe(est_hz, frame.t)
+        self.bpm = self.latch.bpm
+        self._contour.append(float(nf.com_height))
+        if len(self._contour) > 64:
+            self._contour.pop(0)
 
         # 1) continuous per-stem targets
         params = self.resolver.resolve_continuous(sig)
@@ -222,11 +263,18 @@ class Studio:
             stem.params = params[stem.name]
             if stem.timbre == "":
                 stem.timbre = stem.params.timbre
+            acc, cnt = self._dens_acc.get(stem.name, (0.0, 0))
+            self._dens_acc[stem.name] = (acc + float(stem.params.density),
+                                         cnt + 1)
 
-        # game: heat / streak integrate every frame (moves arrive below)
+        # game: heat / streak integrate every frame (moves arrive below).
+        # Dancing ON THE BEAT is what heats the arc -- coherence scales energy,
+        # so the path to PEAK runs through the groove (the skill loop).
         if self.cfg.game:
             self.streak.update(feats.dt, sig["energy"])
-            self.arc.update_frame(feats.dt, sig["energy"], self.streak.heat)
+            self.arc.update_frame(
+                feats.dt, sig["energy"] * (0.55 + 0.45 * self.coherence.score),
+                self.streak.heat)
             self.max_streak_tier = max(self.max_streak_tier, self.streak.tier)
 
         # 2) gestures: recognized + force-fired commands -> actions + flashes
@@ -252,12 +300,20 @@ class Studio:
             self._still_since = None
             gated = False
 
-        # 4) loop grid advance
-        beat = bool(clk.beat)
-        if clk.step_advanced:
+        # 4) the grid: exact step times from the LATCHED tempo (not the
+        # oscillator's wobble). Steps due this frame fire at their true grid
+        # time, so the rendered timing is sample-accurate and metronomic.
+        beat = False
+        if self._next_step_t is None:
+            self._next_step_t = frame.t
+        while frame.t + 1e-9 >= self._next_step_t:
+            step_t = self._next_step_t
             self._abs_step += 1
             self.master_step = self._abs_step % self.cfg.loop_steps
-            self._on_step(sig, eff, nf, clk, gated)
+            if self.master_step % self.cfg.steps_per_beat == 0:
+                beat = True
+            self._on_step(sig, eff, nf, gated, step_t)
+            self._next_step_t = step_t + self.latch.beat_s / self.cfg.steps_per_beat
 
         for stem in self.rack:
             stem.decay_level(feats.dt)
@@ -289,24 +345,17 @@ class Studio:
 
     # -- per-step generation -----------------------------------------------
 
-    def _on_step(self, sig, eff, nf, clk, gated) -> None:
+    def _on_step(self, sig, eff, nf, gated, step_t: float) -> None:
         step = self.master_step
         # deterministic harmony as a function of loop position (looper/builder).
         n = len(self.sub.cfg.harmonic_field)
         self.sub.set_field_index((step * n) // self.cfg.loop_steps)
-        beat_s = 60.0 / max(clk.bpm, 1.0)
+        beat_s = self.latch.beat_s
         steps_per_bar = self.cfg.steps_per_bar
+        bar_step = step % steps_per_bar
 
-        # bar line: the only place the song arc / gold schedule advance.
-        if self.cfg.game and self._abs_step % steps_per_bar == 0:
-            bar = self._abs_step // steps_per_bar
-            prev_section = self.arc.section
-            for s in self.arc.on_bar():
-                self.fx.flashes.append(Flash(
-                    f"{s.upper()} UNLOCKED", stemlib.STEM_COLOR[s],
-                    self._t, 1.2, False))
-            self.gold.on_bar(bar)
-            self._update_lift(prev_section)
+        if self._abs_step % steps_per_bar == 0:
+            self._on_bar(sig, self._abs_step // steps_per_bar, step_t)
 
         entering_still = gated and not self._still
         self._still = gated
@@ -314,12 +363,23 @@ class Studio:
         # band audibly notices you stopped (then the phantom gate holds).
         if (entering_still and self.cfg.game and self._abs_step > 0
                 and self.arc.is_unlocked("lead")):
-            self.fx.trigger("FREEZE", self._t)
-        filling = (self._abs_step < self._fill_until)
-        # streak tier pushes velocity: committing to the dance gets louder hits.
-        vel_bias = 4.0 * self.streak.tier if self.cfg.game else 0.0
-        if self._abs_step < self._boost_until:
-            vel_bias += 8.0
+            self.fx.trigger("FREEZE", step_t)
+
+        # transient windows act at EMISSION so a combo lands instantly, but
+        # the committed plans underneath never change mid-bar.
+        a = self._abs_step
+        filling = a < self._fill_until
+        building = a < self._build_until
+        dropping = a < self._drop_until
+        breaking = a < self._breakdown_until
+        self._vel_bias = (4.0 * self.streak.tier if self.cfg.game else 0.0) \
+            + (8.0 if a < self._boost_until else 0.0)
+
+        # swing: odd 16ths sit late by the style's swing (identity feel).
+        swing_t = step_t + (self.swing * beat_s / self.cfg.steps_per_beat
+                            if bar_step % 2 == 1 else 0.0)
+        if len(self.grid_log) < 65536:           # the rhythm-metrics trace
+            self.grid_log.append((self._abs_step, swing_t))
 
         for stem in self.rack:
             stem.active = False
@@ -329,26 +389,20 @@ class Studio:
             # Locked loops replay deterministically (still subject to mute/solo).
             if stem.looping:
                 events = stem.replay(step)
+            elif gated:
+                # PHANTOM GATE: no new onsets while still/absent, except the
+                # single sanctioned breath chord at the moment stillness begins
+                # (only for stems the song arc has unlocked).
+                if (entering_still and stem.name in ("keys", "texture")
+                        and (not self.cfg.game
+                             or self.arc.is_unlocked(stem.name))):
+                    events = stemlib.revoice_pad(stem, self.sub, sig, beat_s,
+                                                 dur_s=2.0 * beat_s)
             else:
-                density = self._density(stem, sig, step)
-                if gated:
-                    # PHANTOM GATE: no new onsets while still/absent. Allow ONE
-                    # soft sustained pad revoice at the moment stillness begins,
-                    # so it's never abruptly cut -- then nothing more. (Only for
-                    # stems the song arc has unlocked: locked means silent.)
-                    if (entering_still and stem.name in ("keys", "texture")
-                            and (not self.cfg.game
-                                 or self.arc.is_unlocked(stem.name))):
-                        events = stemlib.revoice_pad(stem, self.sub, sig, beat_s)
-                elif density > 0.0:
-                    events = stemlib.generate(stem, self.sub, step, steps_per_bar,
-                                              sig, beat_s, density,
-                                              vel_bias=vel_bias)
-                # FILL: a guaranteed short percussion burst over the fill window.
-                if filling and stem.name == "drums" and not gated:
-                    events = events + [MusicEvent("note_on", stem.channel,
-                                                  stemlib.DRUM_PIECE["hat"], 78,
-                                                  dur=stemlib.DUR["drums"], tag="drums")]
+                if not ((stem.name in ("drums", "bass") and breaking)
+                        or (stem.name in ("lead", "keys", "texture") and dropping)):
+                    events = self._realize(stem, bar_step, sig, beat_s,
+                                           filling, building)
                 stem.capture(step, events)
 
             if events:
@@ -357,44 +411,164 @@ class Studio:
                     (e.b for e in events if e.kind == "note_on"), default=0) / 127.0)
             if audible:
                 for ev in events:
-                    self._emit(ev, self._t)
-                # FIRE+ streak: the lead blooms into an ascending chord-tone
-                # arpeggio -- committing to the dance audibly raises the music.
+                    self._emit(ev, swing_t)
+                # FIRE+ streak AND a locked groove: the lead earns an ascending
+                # ornament run once per bar, on the back half (never spam).
                 if (stem.name == "lead" and events and not gated
-                        and self.cfg.game and self.streak.tier >= 2):
-                    self._arp(stem, events[0], beat_s)
-                # fills get a 32nd-note hat ratchet on the off-beat 8ths.
-                if (filling and stem.name == "drums" and not gated
-                        and step % 4 == 2):
-                    for k in (1, 2):
-                        self._emit(MusicEvent(
-                            "note_on", stem.channel, stemlib.DRUM_PIECE["hat"],
-                            64 - 10 * k, dur=stemlib.DUR["drums"], tag="drums"),
-                            self._t + k * beat_s / 8.0)
+                        and self.cfg.game and self.streak.tier >= 2
+                        and self.coherence.score >= 0.6 and bar_step == 12):
+                    self._arp(stem, events[0], beat_s, swing_t)
 
-    def _density(self, stem, sig, step) -> float:
-        """Mapped density, modulated by the song arc + active gesture windows."""
-        d = float(stem.params.density)
+    # -- bar planning (committed structure; the body modulates within it) ----
+
+    def _on_bar(self, sig, bar_idx: int, step_t: float) -> None:
+        # tempo re-locks land only here, as a deliberate musical event.
+        prop = self.latch.proposal()
+        if prop is not None:
+            self.latch.relock(prop)
+            self.fx.flashes.append(Flash(f"TEMPO {int(prop)}", (200, 220, 255),
+                                         step_t, 0.8, False))
         if self.cfg.game:
-            # the song arc: locked stems are silent until earned; the section
-            # breathes the arrangement (intro sparse -> peak dense).
-            if not self.arc.is_unlocked(stem.name):
-                return 0.0
-            d = min(1.0, d * self.arc.density_mul(stem.name))
-        a = self._abs_step + 1                     # density is decided for next step
-        if stem.name in ("drums",) and a < self._fill_until:
-            d = min(1.0, d + 0.4)                  # fill: extra percussion
-        if a < self._build_until:
-            # build: rising density ramp toward the end of the window
-            frac = 1.0 - (self._build_until - a) / max(self.cfg.steps_per_bar, 1)
-            d = min(1.0, d + 0.5 * float(np.clip(frac, 0, 1)))
-        if a < self._boost_until:
-            d = min(1.0, d + 0.25)                 # combo payoff: denser slam
-        if a < self._breakdown_until and stem.name in ("drums", "bass"):
-            d = 0.0                                # breakdown: strip the bottom
-        if a < self._drop_until and stem.name in ("lead", "keys", "texture"):
-            d = 0.0                                # drop: mute the top, then back
-        return d
+            prev_section = self.arc.section
+            for s in self.arc.on_bar():
+                self.fx.flashes.append(Flash(
+                    f"{s.upper()} UNLOCKED", stemlib.STEM_COLOR[s],
+                    step_t, 1.2, False))
+            self.gold.on_bar(bar_idx)
+            self._update_lift(prev_section, step_t)
+
+        # density -> a committed LEVEL per stem for the whole bar (-1 = tacet).
+        # The commit reads the BAR-AVERAGED density (what you actually danced
+        # last bar), not an instantaneous sample; velocity keeps following the
+        # body inside the bar, but the pattern doesn't.
+        self._levels = {}
+        boosted = self._abs_step < self._boost_until
+        for stem in self.rack:
+            acc, cnt = self._dens_acc.get(stem.name, (0.0, 0))
+            d = acc / cnt if cnt else float(stem.params.density)
+            if self.cfg.game:
+                if not self.arc.is_unlocked(stem.name):
+                    self._levels[stem.name] = -1
+                    continue
+                d = min(1.0, d * self.arc.density_mul(stem.name))
+            lvl = -1 if d < 0.04 else min(3, int(d * 4.0))
+            if lvl >= 0 and boosted:
+                lvl = min(3, lvl + 1)
+            if lvl >= 0 and self.cfg.game:
+                lvl = self.coherence.gate_level(lvl)   # the skill gate
+            # slew: the arrangement evolves at most one level per bar, so a
+            # bucket flapping on its boundary can't teleport the pattern.
+            prev = self._prev_levels.get(stem.name)
+            if prev is not None and prev >= 0 and lvl >= 0:
+                lvl = prev + int(np.sign(lvl - prev))
+            self._levels[stem.name] = lvl
+        self._prev_levels = dict(self._levels)
+
+        self._dens_acc = {}
+
+        dl, bl = self._levels.get("drums", -1), self._levels.get("bass", -1)
+        kl, tl = self._levels.get("keys", -1), self._levels.get("texture", -1)
+        ll = self._levels.get("lead", -1)
+        self._drum_bar = G.drum_plan(self.style, dl) if dl >= 0 else None
+        self._bass_bar = G.bass_plan(self.style, bl) if bl >= 0 else None
+        self._keys_bar = dict(G.keys_plan(self.style, kl)) if kl >= 0 else {}
+        self._tex_bar = set(G.texture_plan(tl, bar_idx)) if tl >= 0 else set()
+        self._lead_on = ll >= 0
+        if self._lead_on:
+            self.writer.maybe_compose(ll, list(self._contour), bar_idx)
+
+    def _vel(self, base: float, sig: dict) -> int:
+        """Pattern accents live in `base`; the body modulates around them, and
+        a loose groove dims the whole kit slightly (skill, not punishment)."""
+        v = base + 24.0 * (sig["energy"] - 0.5) + 12.0 * (sig["weight"] - 0.5) \
+            + self._vel_bias
+        if self.cfg.game:
+            v *= 0.86 + 0.14 * self.coherence.score
+        return int(np.clip(v, 1, 127))
+
+    def _chord_events(self, stem, sig, dur_s: float, base_vel: float
+                      ) -> List[MusicEvent]:
+        openness = float(np.clip(sig.get("openness", 0.5), 0, 1))
+        tones = self.sub.chord_tones(extended=openness > 0.6)
+        notes = sorted({self.sub.fold_into_range(
+            self.sub.degree_to_midi(d, octave=int(k * (0.3 + 0.7 * openness))),
+            stem.role.lo, stem.role.hi) for k, d in enumerate(tones)})
+        return [MusicEvent("note_on", stem.channel, nn,
+                           self._vel(base_vel, sig), dur=dur_s, tag=stem.name)
+                for nn in notes]
+
+    def _realize(self, stem, bar_step: int, sig: dict, beat_s: float,
+                 filling: bool, building: bool) -> List[MusicEvent]:
+        """This step's committed plan -> events (velocity follows the body)."""
+        out: List[MusicEvent] = []
+        if stem.name == "drums":
+            slots = list(self._drum_bar[bar_step]) if self._drum_bar else []
+            if filling:                       # overlay: snare run up + drive
+                if bar_step in G.FILL_SNARE:
+                    slots.append(("snare",
+                                  64 + 10 * G.FILL_SNARE.index(bar_step)))
+                if bar_step in G.FILL_HAT and not any(p == "hat" for p, _ in slots):
+                    slots.append(("hat", G.LANE_VEL["hat"]))
+            if building and bar_step % 2 == 0 \
+                    and not any(p == "hat" for p, _ in slots):
+                slots.append(("hat", 44 + 2 * bar_step))   # rising 8ths
+            for piece, base in slots:
+                out.append(MusicEvent("note_on", stem.channel,
+                                      stemlib.DRUM_PIECE[piece],
+                                      self._vel(base, sig), dur=0.06,
+                                      tag="drums"))
+            return out
+
+        if stem.name == "bass":
+            for off, base, dur_b in (self._bass_bar[bar_step]
+                                     if self._bass_bar else []):
+                note = self.sub.fold_into_range(
+                    self.sub.degree_to_midi(self.sub.chord_root_degree + off),
+                    stem.role.lo, stem.role.hi)
+                out.append(MusicEvent("note_on", stem.channel, note,
+                                      self._vel(base, sig), dur=dur_b * beat_s,
+                                      tag="bass"))
+            return out
+
+        if stem.name == "keys":
+            kind = self._keys_bar.get(bar_step)
+            if kind == "pad":
+                return self._chord_events(stem, sig, 3.6 * beat_s, 50)
+            if kind == "stab":
+                return self._chord_events(stem, sig, 0.45 * beat_s, 64)
+            return out
+
+        if stem.name == "lead":
+            if not self._lead_on:
+                return out
+            flow = float(sig.get("flow", 0.5))
+            for slot, degree, strong in self.writer.plan(
+                    self.sub.chord_root_degree):
+                if slot != bar_step:
+                    continue
+                note = self.sub.fold_into_range(
+                    self.sub.degree_to_midi(
+                        degree, octave=int(stem.params.register_octave)),
+                    stem.role.lo, stem.role.hi)
+                out.append(MusicEvent(
+                    "note_on", stem.channel, note,
+                    self._vel(74 + (6 if strong else 0), sig),
+                    dur=(0.45 + 0.5 * flow) * beat_s, tag="lead"))
+            return out
+
+        # texture: the committed polyrhythm, quiet and long.
+        if bar_step in self._tex_bar:
+            note = self.sub.snap(float(np.clip(stem.params.pitch, 0, 1)),
+                                 stem.role, chord_weighted=True)
+            out.append(MusicEvent("note_on", stem.channel, note,
+                                  self._vel(40, sig), dur=2.0 * beat_s,
+                                  tag="texture"))
+        return out
+
+    def _quantize_fx(self, t: float) -> float:
+        """Snap a gesture one-shot onto the next 16th so even spontaneous hits
+        land in the pocket."""
+        return max(t, self._next_step_t) if self._next_step_t is not None else t
 
     # -- gesture actions ---------------------------------------------------
 
@@ -460,7 +634,7 @@ class Studio:
             self.fx.trigger("HANDS UP", t)
         elif p == "eclipse":                       # flip light <-> dark
             self._breakdown_until = max(self._breakdown_until, a + bar)
-            self._eclipse_flip()
+            self._eclipse_flip(t)
         elif p == "knockout":                      # three ascending chord stabs
             self.fx.trigger("KNOCKOUT", t)
             self._fill_until = max(self._fill_until, a + bar)
@@ -468,7 +642,22 @@ class Studio:
         # appended last so the big banner reads the combo's name.
         self.fx.flashes.append(Flash(combo.name, combo.color, t, 0.9, True))
 
-    def _eclipse_flip(self) -> None:
+    def _request_fill(self, t: float) -> None:
+        """The fill budget: a drummer fills about once a phrase, not every
+        other beat. Over-budget requests still answer the move instantly with
+        a single accent hit, so the causation stays legible."""
+        bar = self.cfg.steps_per_bar
+        if self._abs_step >= self._fill_until + 3 * bar:
+            self._fill_until = self._abs_step + bar
+        else:
+            self.backend.send(MusicEvent(
+                "note_on", stemlib.CHANNELS["drums"], stemlib.DRUM_PIECE["hat"],
+                96, t=self._quantize_fx(t), dur=0.1, tag="drums"))
+
+    def _log_key(self, t: float) -> None:
+        self.key_log.append((t, self.sub.cfg.tonic, self.sub.cfg.scale))
+
+    def _eclipse_flip(self, t: float) -> None:
         """Toggle between this person's home scale and the mapping's dark mood."""
         dark = self.mapping.moods.get("dark", "phrygian")
         to = dark if self.sub.cfg.scale != dark else self._base_scale
@@ -476,26 +665,26 @@ class Studio:
             self.sub.cfg.scale = to
             self.sub._scale = SCALES[to]
             self.mood = to
+            self._log_key(t)
 
-    def _arp(self, stem, base_ev, beat_s: float) -> None:
-        """Two extra chord-tone steps above the lead note, staggered inside the
-        beat (scheduled sends, like fx one-shots, so loop buffers stay clean)."""
-        v = float(np.clip(stem.params.pitch, 0.0, 1.0))
-        step_s = max(beat_s / 8.0, 0.05)
+    def _arp(self, stem, base_ev, beat_s: float, t0: float) -> None:
+        """Two extra chord-tone steps above the lead note, staggered on the
+        16th grid (scheduled sends, like fx one-shots, so loops stay clean)."""
+        step_s = beat_s / self.cfg.steps_per_beat
+        root = self.sub.chord_root_degree
         for k in (1, 2):
-            note = self.sub.snap(min(1.0, v + 0.18 * k), stem.role,
-                                 chord_weighted=True)
             note = self.sub.fold_into_range(
-                note + 12 * int(stem.params.register_octave),
+                self.sub.degree_to_midi(root + 2 * k + 2,
+                                        octave=int(stem.params.register_octave)),
                 stem.role.lo, stem.role.hi)
-            t = self._t + k * step_s
+            t = t0 + k * step_s
             vel = max(40, int(base_ev.b) - 12 * k)
             self.backend.send(MusicEvent("note_on", stem.channel, note, vel,
                                          t=t, dur=0.12, tag="lead"))
             self.backend.send(MusicEvent("note_off", stem.channel, note, 0,
                                          t=t + 0.12, tag="lead"))
 
-    def _update_lift(self, prev_section: str) -> None:
+    def _update_lift(self, prev_section: str, t: float) -> None:
         """THE LIFT: reaching PEAK transposes the whole world up two semitones
         (the classic modulation); cooling back down undoes it. Locked loop
         buffers are transposed with it, so loops recorded before the lift stay
@@ -504,16 +693,17 @@ class Studio:
         if now == prev_section:
             return
         if now == "peak" and not self._lifted:
-            self._transpose(+2)
+            self._transpose(+2, t)
             self._lifted = True
-            self.fx.flashes.append(Flash("THE LIFT", GOLD_COLOR, self._t,
+            self.fx.flashes.append(Flash("THE LIFT", GOLD_COLOR, t,
                                          0.8, False))
         elif prev_section == "peak" and self._lifted:
-            self._transpose(-2)
+            self._transpose(-2, t)
             self._lifted = False
 
-    def _transpose(self, semis: int) -> None:
+    def _transpose(self, semis: int, t: float) -> None:
         self.sub.cfg.tonic += semis
+        self._log_key(t)
         for stem in self.rack:
             if stem.channel == 10:
                 continue
@@ -529,7 +719,7 @@ class Studio:
             # its own channel. Map the binding's params to a known fx move.
             self.fx.trigger(_fx_move(params), t)
         elif action == "fill":
-            self._fill_until = self._abs_step + self.cfg.steps_per_bar
+            self._request_fill(t)
         elif action == "drop":
             self._drop_until = self._abs_step + self.cfg.steps_per_bar
         elif action == "breakdown":
@@ -554,6 +744,7 @@ class Studio:
                 self.sub.cfg.scale = scale
                 self.sub._scale = SCALES[scale]
                 self.mood = scale
+                self._log_key(t)
         elif action == "timbre_morph":
             s = self.rack.get(target)
             to = params.get("to")
@@ -646,7 +837,8 @@ class Studio:
             unlocked={s.name: self.arc.is_unlocked(s.name) for s in self.rack},
             identity_name=ident.name if ident else "",
             identity_tagline=ident.tagline if ident else "",
-            identity_color=ident.color if ident else (220, 220, 235))
+            identity_color=ident.color if ident else (220, 220, 235),
+            groove=float(self.coherence.score))
 
 
 def _fx_move(params: dict) -> str:

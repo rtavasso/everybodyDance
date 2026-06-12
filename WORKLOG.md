@@ -445,6 +445,70 @@ less; consider energy-derivative coupling features. Session films render ~2x
 realtime offline; live stage cost of aurora/shockwaves unmeasured on gallery
 hardware (G7 probe still open).
 
+## Entry 13 — the Groove update (the musical-quality rework)
+Owner verdict on the audio: terrible — drums spamming off-beat, no coherence,
+melody random. Diagnosis confirmed in the architecture: (1) the entrained
+clock SLID continuously, so the "grid" wobbled; (2) euclidean patterns were
+recomputed EVERY STEP from continuous energy, so nothing ever repeated (a beat
+only exists if it repeats); (3) no backbeat at all; (4) lead pitch re-rolled
+per onset from instantaneous height = a random walk. The fix is a design
+inversion: **the body stops micro-managing note placement and instead commits
+musical structure at musical boundaries, then modulates within it.**
+
+- **groove.py — the backbone.** `TempoLatch`: tempo estimated from the dance
+  (median bounce-peak interval — the oscillator proved unreliable: 64–124 BPM
+  wander on a clean 2 Hz bounce; it's now only the cold-start fallback) but
+  LATCHED to an integer BPM; re-locks only after a sustained stable deviation,
+  only at bar lines ("TEMPO 124" flashes). Notes are scheduled at EXACT grid
+  times (sample-accurate offline; sub-frame peak timing via parabolic
+  interpolation keeps the estimate within ~3%).
+- **Committed bar plans.** Curated groove STYLES (four_floor / backbeat /
+  breaks / half_time — identity picks; every level of every style is a pattern
+  a drummer would play, with real backbeats), 4 density LEVELS per style. The
+  bar's level is committed at the bar line from BAR-AVERAGED density, slewed
+  ±1 level/bar, gated by skill; velocity keeps following the body per-note.
+  Bass locks to the kick on chord roots (fifth/octave at higher levels); keys
+  comp on style slots (pad low, stabs high); texture keeps the committed
+  polyrhythm. Swing per style. Fills got a budget (~once per phrase; over-
+  budget moves still get an instant accent), and fx one-shots quantize to the
+  next 16th.
+- **MotifWriter — the melody is a motif, not a walk.** Rhythm template +
+  pitches sampled from the dancer's height contour at compose time (raise your
+  body → the next phrase sits higher), chord tones on strong slots, stepwise
+  (≤3 scale steps) elsewhere; persists across bars, mutates ONE slot per
+  phrase, recomposes on level change, and re-roots with the harmonic field /
+  THE LIFT for free (degree-based).
+- **RhythmCoherence — the skill loop.** Circular statistics of bounce-peak
+  phases against the latched grid → groove score (shown as a GROOVE meter on
+  stage). Low coherence caps the kit at plain levels and dims velocity
+  (never broken, just plain); locking to the beat earns the backbeat, ghosts,
+  the full motif, the arp ornament, and scales the arc's heat — dancing ON
+  the beat is the path to PEAK. Exactly the owner's "skill-based" ask.
+- **Honest metrics for all of it.** `rhythm.*` SLOs: on_grid_pct ≥ 95 (drum
+  onsets within 12 ms of the logged grid), bar_similarity ≥ 0.5 vs the MODAL
+  bar (fills are sanctioned variation), tempo_relocks ≤ 4. Key changes (LIFT/
+  ECLIPSE/shift) now logged by the studio at exact times (`key_log`) — fixed a
+  3-frame race that mis-graded in-scale at lift boundaries. Dead-zone moved to
+  0.75 s bins (a low-level groove is legitimately sparse at 0.25 s). Coupling
+  became timescale-honest per the project thesis: density correlated at bar
+  scale (where the body now drives structure), velocity/pitch fine-grained,
+  plus the kick-velocity lane in isolation (constant pattern base ⇒ the series
+  IS the body's dynamics).
+- **Results.** Corpus 13/13 SLOs (on-grid 97.7 %, modal similarity 0.66, 3
+  deliberate re-locks, in-scale 100 %, phantom 0). benchmark_dance (real
+  video): **13/13** — on-grid 100 %, similarity 0.64, coupling 0.376. right_
+  dance: 12/13 — similarity 0.41 with groove score 0.34: that dancer noodles,
+  and the system correctly stays plainer and looser — the skill loop measured.
+  Beat-spectrum check on the rendered audio: clear periodicity at the latched
+  beat lag (4–6x the autocorrelation floor) in all three renders. 162/162
+  tests (test_groove.py: latch, plans, motif, coherence, metronomic-grid
+  proof).
+
+Open: right_dance bar similarity is dancer-limited (by design) — a [HUMAN]
+listen should confirm "plain but musical"; phase-drift tempo correction could
+close the residual ~3% latch bias; live-path latency of exact-time scheduling
+unmeasured on gallery hardware (G7).
+
 ## Log
 (newest at bottom)
 

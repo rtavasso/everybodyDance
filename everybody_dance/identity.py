@@ -63,6 +63,11 @@ _PALETTE_SCALES = {"ambient": ["lydian", "major_pentatonic", "major"],
                    "rhythmic": ["phrygian", "minor_pentatonic", "dorian"]}
 _PALETTE_ROOT_LO = {"ambient": 57, "neutral": 53, "rhythmic": 48}
 
+# Movement palette -> which drum groove styles suit it (groove.STYLES).
+_PALETTE_STYLES = {"ambient": ["half_time", "backbeat"],
+                   "neutral": ["backbeat", "breaks"],
+                   "rhythmic": ["four_floor", "breaks"]}
+
 # Stage-name vocabulary: the adjective reflects the movement palette (so the
 # name reads as earned), the noun carries the fine-grained uniqueness.
 _ADJ = {"ambient": ["LUNAR", "VELVET", "MISTY", "OPAL", "DRIFTING"],
@@ -84,10 +89,11 @@ class SoundIdentity:
     kit_name: str = "neon"
     kit: Dict[str, str] = field(default_factory=lambda: dict(KITS["neon"]))
     color: Tuple[int, int, int] = (255, 120, 220)
+    style: str = "backbeat"          # drum groove style (groove.STYLES)
 
     @property
     def tagline(self) -> str:
-        return f"{self.root_name} {self.scale} - {self.kit_name} kit"
+        return f"{self.root_name} {self.scale} - {self.kit_name} kit - {self.style}"
 
 
 def _dna(signature: dict) -> int:
@@ -133,6 +139,8 @@ def derive_identity(signature: dict | None) -> SoundIdentity:
     progression = list(PROGRESSIONS[scale][(dna // 8) % len(PROGRESSIONS[scale])])
     kits = _PALETTE_KITS[palette]
     kit_name = kits[(dna // 32) % len(kits)]
+    styles = _PALETTE_STYLES[palette]
+    style = styles[(dna // 128) % len(styles)]
     name = (_ADJ[palette][(dna // 64) % len(_ADJ[palette])] + " "
             + _NOUN[(dna // 320) % len(_NOUN)])
 
@@ -140,4 +148,5 @@ def derive_identity(signature: dict | None) -> SoundIdentity:
     return SoundIdentity(
         name=name, palette=palette, tonic=int(tonic),
         root_name=_PC_NAMES[tonic % 12], scale=scale, progression=progression,
-        kit_name=kit_name, kit=dict(KITS[kit_name]), color=KIT_COLOR[kit_name])
+        kit_name=kit_name, kit=dict(KITS[kit_name]), color=KIT_COLOR[kit_name],
+        style=style)
