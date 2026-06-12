@@ -93,6 +93,14 @@ class TempoLatch:
         self.relocks += 1
         self._est.clear()
 
+    def trim(self, drift_beats_per_beat: float) -> None:
+        """A fine tempo correction from the phase servo's integral term: the
+        grid kept shifting `drift` beats later per beat, so the true period is
+        (1 + drift) longer. Sub-integer, silent, not counted as a re-lock."""
+        lo, hi = self.band
+        self.bpm = float(np.clip(self.bpm / (1.0 + drift_beats_per_beat),
+                                 lo, hi))
+
 
 # -- drum grooves --------------------------------------------------------------
 
@@ -270,6 +278,116 @@ class MotifWriter:
                 for s, off, strong in self.slots]
 
 
+# -- the body as an audio signal -----------------------------------------------
+
+
+class KineticFlux:
+    """Audio-style onset detection on the BODY: a rectified multi-joint
+    acceleration envelope with an adaptive threshold (the 'visual beats' idea
+    -- Davis & Agrawala 2018 -- applied to skeleton kinematics). A punch, a
+    stomp, an arm hit, a plant: each is an accel spike that pops out of the
+    dancer's own running statistics. Returns an onset strength (0..1) on the
+    frame an accent lands, else None. Deterministic, streaming, O(joints)."""
+
+    REFRACTORY = 0.18      # s -- faster than any human double-hit we care about
+    Z_ON = 2.2             # threshold in adaptive std units
+
+    # joint weights: extremities carry the accents (index = pose.JOINTS order:
+    # nose, l/r shoulder, l/r elbow, l/r wrist, l/r hip, l/r knee, l/r ankle)
+    W = np.array([0.2, 0.3, 0.3, 0.6, 0.6, 1.0, 1.0, 0.4, 0.4, 0.6, 0.6,
+                  1.0, 1.0])
+
+    def __init__(self):
+        self._mean = 0.0
+        self._var = 1.0
+        self._prev = 0.0
+        self._last_t = -1e9
+
+    def update(self, accel_mag: np.ndarray, t: float, dt: float
+               ) -> Optional[float]:
+        flux = float((self.W[: len(accel_mag)] * accel_mag).mean())
+        # adaptive stats (~2 s time constant) of the flux itself.
+        k = float(np.clip(dt / 2.0, 0.0, 1.0))
+        self._mean += k * (flux - self._mean)
+        self._var += k * ((flux - self._mean) ** 2 - self._var)
+        std = max(np.sqrt(self._var), 1e-4)
+        z = (flux - self._mean) / std
+        rising = flux > self._prev
+        self._prev = flux
+        if z > self.Z_ON and rising and t - self._last_t >= self.REFRACTORY:
+            self._last_t = t
+            return float(np.clip((z - self.Z_ON) / 4.0 + 0.25, 0.0, 1.0))
+        return None
+
+
+class PhaseServo:
+    """The PLL that puts the downbeat ON the dancer's accents.
+
+    Tempo is the latch's job; this owns PHASE. Each accent's signed error to
+    the nearest HALF-beat (mod-8th: a dancer accenting on 8ths is on the grid)
+    enters a weighted circular buffer; when the errors agree (resultant R >=
+    0.5) the grid is nudged by up to 4% of a beat per beat -- inaudible per
+    step, converging in a couple of bars -- with one full hard snap allowed
+    early in a session (the band starts ON your hit). Incoherent accents (R
+    low) are never chased: the grid holds steady."""
+
+    PERIOD = 1.0           # beats: true downbeat alignment. A dancer accenting
+                           # at 8th rate splits the circular mean (R drops) and
+                           # is simply not chased -- they're already grid-dense.
+    MAX_STEP = 0.04        # beats of correction per beat
+    R_MIN = 0.5
+
+    def __init__(self, window: int = 8):
+        self._errs: deque = deque(maxlen=window)   # (err in beats, weight)
+        self._corrs: deque = deque(maxlen=8)       # applied, in beats
+        self.snapped = False
+
+    def observe(self, t: float, strength: float, beat_s: float,
+                next_beat_t: float) -> None:
+        d = (t - next_beat_t) / beat_s
+        e = (((d / self.PERIOD + 0.5) % 1.0) - 0.5) * self.PERIOD
+        self._errs.append((float(e), float(max(strength, 1e-3))))
+
+    def _mean_err(self) -> Tuple[float, float]:
+        """Weighted circular mean error (beats) + resultant R (agreement)."""
+        if len(self._errs) < 3:
+            return 0.0, 0.0
+        ang = np.array([2 * np.pi * e / self.PERIOD for e, _ in self._errs])
+        w = np.array([wt for _, wt in self._errs])
+        v = (w * np.exp(1j * ang)).sum() / w.sum()
+        return float(np.angle(v) / (2 * np.pi) * self.PERIOD), float(np.abs(v))
+
+    def correction(self, beat_s: float, allow_snap: bool) -> float:
+        """Seconds to add to the upcoming grid (call once per beat)."""
+        m, r = self._mean_err()
+        if r < self.R_MIN:
+            return 0.0
+        if allow_snap and not self.snapped and abs(m) > self.MAX_STEP:
+            corr = m * beat_s                       # one hard snap, early
+            self.snapped = True
+        else:
+            corr = float(np.clip(m, -self.MAX_STEP, self.MAX_STEP)) * beat_s
+        # the stored errors were measured against the old grid: re-base them.
+        self._errs = deque(((e - corr / beat_s, w) for e, w in self._errs),
+                           maxlen=self._errs.maxlen)
+        self._corrs.append(corr / beat_s)
+        return corr
+
+    def persistent_drift(self) -> Optional[float]:
+        """The PLL's integral term: if the servo keeps correcting the SAME way
+        every beat, the latched tempo itself is slightly off -- return the
+        mean drift (beats per beat) so the latch can trim, else None."""
+        if len(self._corrs) < self._corrs.maxlen:
+            return None
+        c = np.array(self._corrs)
+        if np.all(c > 0) or np.all(c < 0):
+            m = float(c.mean())
+            if abs(m) > 0.008:
+                self._corrs.clear()
+                return m
+        return None
+
+
 # -- the skill loop ----------------------------------------------------------------
 
 
@@ -294,9 +412,12 @@ class RhythmCoherence:
         self._last_peak_t = -1e9
         self._low = None
 
-    def update(self, bounce: float, t: float, beat_s: float, dt: float) -> float:
+    def update(self, bounce: float, t: float, beat_s: float, dt: float,
+               anchor_t: float = 0.0) -> float:
         # smooth first (~3 Hz one-pole): pose noise makes micro-peaks that the
-        # raw signal's state machine would mistake for pulses.
+        # raw signal's state machine would mistake for pulses. `anchor_t` is a
+        # known grid-beat time, so phases stay honest when the servo shifts
+        # the grid.
         raw = float(bounce)
         if self._filt is None:
             self._filt = raw
@@ -322,7 +443,7 @@ class RhythmCoherence:
                         tp += float(np.clip(0.5 * (self._prev2 - b) / den,
                                             -0.5, 0.5)) * dt
                 self._last_peak_t = t
-                self._phases.append((tp / beat_s) % 1.0)
+                self._phases.append(((tp - anchor_t) / beat_s) % 1.0)
                 self._peak_times.append(tp)
                 self._low = b
             if not self._rising:
@@ -336,6 +457,11 @@ class RhythmCoherence:
             target = self.NEUTRAL
         self.score += float(np.clip(dt / 2.5, 0, 1)) * (target - self.score)
         return self.score
+
+    @property
+    def last_peak_t(self) -> Optional[float]:
+        """Sub-frame time of the most recent bounce peak (the body's pulse)."""
+        return self._peak_times[-1] if self._peak_times else None
 
     @property
     def tempo_hz(self) -> Optional[float]:

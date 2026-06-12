@@ -499,7 +499,10 @@ def compute_metrics(r, labels) -> dict:
     # consecutive bars' drum slot patterns (a beat exists only if it repeats).
     g = r["studio"]
     grid = list(g.grid_log)
-    drum_ts = [e.t for e in events if e.kind == "note_on" and e.channel == 10]
+    # the committed groove only: accent answers (tag 'accent') are deliberate
+    # body punctuation, not pattern.
+    drum_ts = [e.t for e in events if e.kind == "note_on" and e.channel == 10
+               and e.tag != "accent"]
     if grid and drum_ts:
         gt = np.array([t for _, t in grid])
         gs = np.array([s for s, _ in grid])
@@ -523,9 +526,28 @@ def compute_metrics(r, labels) -> dict:
             bar_similarity = 0.0
     else:
         on_grid_pct, bar_similarity = 0.0, 0.0
+    # downbeat alignment: do the dancer's SIGNIFICANT movements (strong
+    # kinetic-flux onsets) coincide with the grid's 8ths? This is the felt
+    # "my hit owns the beat" property the phase servo exists for.
+    beat_s = 60.0 / g.latch.bpm
+    eighths = np.array([t for s, t in grid if s % 2 == 0]) if grid else np.array([])
+    strong = [t for t, w in g.onset_log if w >= 0.4]
+    if eighths.size and strong:
+        errs = []
+        for t in strong:
+            i = int(np.clip(np.searchsorted(eighths, t), 1, len(eighths) - 1))
+            errs.append(min(abs(eighths[i] - t), abs(eighths[i - 1] - t)) / beat_s)
+        errs = np.array(errs)
+        on_pulse_pct = float(np.mean(errs <= 0.125) * 100.0)
+        pulse_err_med = float(np.median(errs))
+    else:
+        on_pulse_pct, pulse_err_med = 0.0, 0.5
     rhythm = {"bpm": float(g.latch.bpm), "tempo_relocks": int(g.latch.relocks),
               "on_grid_pct": round(on_grid_pct, 1),
               "bar_similarity": round(bar_similarity, 3),
+              "on_pulse_pct": round(on_pulse_pct, 1),
+              "pulse_err_med_beats": round(pulse_err_med, 3),
+              "n_onsets": len(g.onset_log),
               "groove_score_mean": round(float(np.mean(r["mv"]["groove"])), 3)
               if r["mv"].get("groove") else None,
               "style": g.style, "swing": g.swing}

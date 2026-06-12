@@ -172,6 +172,58 @@ def test_gate_level_caps_when_loose():
     assert c.gate_level(3) == 3
 
 
+# -- the phase servo: significant movements own the downbeat -----------------------
+
+def test_phase_servo_converges_onto_offset_accents():
+    from everybody_dance.groove import PhaseServo
+    servo = PhaseServo()
+    beat_s, offset = 0.5, 0.17     # the dancer's accents: fixed in world time,
+    grid_shift = 0.0               # 170 ms after where the grid put its beats
+    for beat in range(24):
+        nb = (beat + 1) * beat_s + grid_shift
+        servo.observe(beat * beat_s + offset, 0.8, beat_s, nb)
+        grid_shift += servo.correction(beat_s, allow_snap=beat < 8)
+    # the grid moved to the accents: residual error well under a 16th.
+    res = (offset - grid_shift) % beat_s
+    assert min(res, beat_s - res) < 0.04 * beat_s, grid_shift
+    assert servo.snapped
+
+
+def test_phase_servo_ignores_incoherent_accents():
+    from everybody_dance.groove import PhaseServo
+    servo = PhaseServo()
+    beat_s = 0.5
+    ts = [0.11, 0.43, 0.95, 1.21, 1.74, 2.02, 2.55, 2.91]   # arrhythmic
+    total = 0.0
+    for k, t in enumerate(ts):
+        servo.observe(t, 0.8, beat_s, (k + 1) * beat_s)
+        total += abs(servo.correction(beat_s, allow_snap=False))
+    assert total < 0.02                          # incoherence is never chased
+
+
+def test_studio_downbeat_lands_on_the_dancers_pulse():
+    """THE felt property: after settling, the dancer's onsets (pulse + accents)
+    coincide with grid beats -- the downbeat is theirs."""
+    n = int(30 * FPS)
+    seq = _groove(n)
+    be = LogBackend()
+    st = Studio(be, _profile(seq))
+    for fr in ArrayPoseSource(seq, fps=FPS, flip_y=False).frames():
+        st.step(fr, [])
+    st.panic()
+    beats = np.array([t for s, t in st.grid_log if s % 4 == 0])
+    beat_s = st.latch.beat_s
+    errs = []
+    for t, w in st.onset_log:
+        if t < 10.0:
+            continue
+        i = int(np.clip(np.searchsorted(beats, t), 1, len(beats) - 1))
+        errs.append(min(abs(beats[i] - t), abs(beats[i - 1] - t)) / beat_s)
+    assert len(errs) >= 10
+    assert float(np.median(errs)) < 0.15, np.median(errs)
+    assert float(np.mean(np.array(errs) <= 0.125)) >= 0.6
+
+
 # -- studio-level: the grid is metronomic ------------------------------------------
 
 def test_studio_grid_is_metronomic_and_bars_repeat():
@@ -182,14 +234,25 @@ def test_studio_grid_is_metronomic_and_bars_repeat():
     for fr in ArrayPoseSource(seq, fps=FPS, flip_y=False).frames():
         st.step(fr, [])
     st.panic()
-    # after the lock settles, kick IOIs are exact multiples of the step.
-    step_s = st.latch.beat_s / 4
+    # the grid is metronomic modulo the phase servo: every kick sits ON a
+    # logged grid time, and consecutive grid intervals never jump more than
+    # the servo's bound (no wobble, no slide).
+    grid_t = np.array([t for _, t in st.grid_log])
     kicks = [e.t for e in be.events
              if e.kind == "note_on" and e.channel == 10 and e.a == 36
              and e.t > 10.0]
     assert len(kicks) >= 6
-    for ioi in np.diff(kicks):
-        assert abs(ioi / step_s - round(ioi / step_s)) < 0.02, ioi
+    for t in kicks:
+        assert np.abs(grid_t - t).min() < 0.012, t
+    # smoothness on the UNSWUNG even steps (odd 16ths sit late by the style's
+    # swing on purpose): the only interval jumps allowed are the deliberate
+    # tempo re-locks; inside a lock span the grid never wobbles or slides.
+    even_t = np.array([t for s, t in st.grid_log if s % 2 == 0])
+    ratios = np.diff(even_t)[1:] / np.diff(even_t)[:-1]
+    jumps = int(np.sum((ratios < 0.88) | (ratios > 1.14)))
+    # allowed: one per tempo re-lock, plus the servo's single hard snap (which
+    # perturbs two consecutive ratios at its boundary).
+    assert jumps <= st.latch.relocks + 2, (jumps, st.latch.relocks)
     # the backbeat exists and the key stays in scale per the key log.
     snares = [e for e in be.events if e.kind == "note_on" and e.a == 38
               and e.channel == 10]

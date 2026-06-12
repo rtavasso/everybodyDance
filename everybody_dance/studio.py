@@ -182,6 +182,12 @@ class Studio:
         # and the rhythmic-coherence skill loop (see groove.py).
         self.latch = G.TempoLatch(initial_hz=profile.char_tempo_hz)
         self.coherence = G.RhythmCoherence()
+        self.flux = G.KineticFlux()              # body accents (onset detector)
+        self.servo = G.PhaseServo()              # puts the beat ON the accents
+        self.onset_log: List = []                # (t, strength) for metrics
+        self._lean = 0.0                         # accent -> next beat leans in
+        self._accent_last_t = -1e9
+        self._last_pulse_t = None
         self.style = self.identity.style if self.identity else "backbeat"
         self.swing = G.SWING.get(self.style, 0.08)
         self.writer = G.MotifWriter(
@@ -239,8 +245,12 @@ class Studio:
         # tempo: estimates only -- the latch decides, at bar lines. The pulse
         # listener's inter-peak estimate leads (robust on real bodies); the
         # entrained oscillator is the fallback before enough peaks exist.
-        self.coherence.update(float(feats.bounce), frame.t, self.latch.beat_s,
-                              feats.dt)
+        anchor = self._next_beat_t()
+        # NEGATED bounce: the pulse listener detects the TROUGH -- the dig,
+        # the bottom of the bounce, which is where a dancer marks the beat
+        # (and which is sharp where the top is a plateau).
+        self.coherence.update(-float(feats.bounce), frame.t, self.latch.beat_s,
+                              feats.dt, anchor_t=anchor or 0.0)
         if present:
             est_hz = self.coherence.tempo_hz
             if est_hz is None and clk.confidence > 0.25:
@@ -248,6 +258,24 @@ class Studio:
             if est_hz is not None:
                 self.latch.observe(est_hz, frame.t)
         self.bpm = self.latch.bpm
+        # body accents: every significant movement is an onset the band hears
+        # -- it feeds the phase servo (the downbeat moves TO your hits) and is
+        # answered below once the stillness gate is known. The bounce pulse
+        # itself also feeds the servo: for a smooth mover with no sharp
+        # accents, the pulse IS the accent.
+        onset = self.flux.update(feats.accel_mag, frame.t, feats.dt) \
+            if present else None
+        if onset is not None:
+            self.onset_log.append((frame.t, onset))
+            if anchor is not None:
+                self.servo.observe(frame.t, onset, self.latch.beat_s, anchor)
+            self._lean = max(self._lean, 16.0 * onset)
+        pulse_t = self.coherence.last_peak_t
+        if present and pulse_t is not None and pulse_t != self._last_pulse_t:
+            self._last_pulse_t = pulse_t
+            self.onset_log.append((pulse_t, 0.35))
+            if anchor is not None:
+                self.servo.observe(pulse_t, 0.35, self.latch.beat_s, anchor)
         self._contour.append(float(nf.com_height))
         if len(self._contour) > 64:
             self._contour.pop(0)
@@ -300,9 +328,15 @@ class Studio:
             self._still_since = None
             gated = False
 
+        # the band answers your hit: an immediate accent in the pocket.
+        if onset is not None and not gated:
+            self._accent_answer(frame.t, onset)
+
         # 4) the grid: exact step times from the LATCHED tempo (not the
         # oscillator's wobble). Steps due this frame fire at their true grid
-        # time, so the rendered timing is sample-accurate and metronomic.
+        # time, so the rendered timing is sample-accurate and metronomic. At
+        # each beat the phase servo nudges the grid onto the dancer's accents
+        # (one hard snap allowed early in a session).
         beat = False
         if self._next_step_t is None:
             self._next_step_t = frame.t
@@ -310,10 +344,16 @@ class Studio:
             step_t = self._next_step_t
             self._abs_step += 1
             self.master_step = self._abs_step % self.cfg.loop_steps
-            if self.master_step % self.cfg.steps_per_beat == 0:
-                beat = True
+            is_beat = self.master_step % self.cfg.steps_per_beat == 0
+            beat = beat or is_beat
             self._on_step(sig, eff, nf, gated, step_t)
             self._next_step_t = step_t + self.latch.beat_s / self.cfg.steps_per_beat
+            if is_beat and present:
+                self._next_step_t += self.servo.correction(
+                    self.latch.beat_s, allow_snap=self._abs_step < 128)
+                drift = self.servo.persistent_drift()
+                if drift is not None:
+                    self.latch.trim(drift)       # the PLL's integral term
 
         for stem in self.rack:
             stem.decay_level(feats.dt)
@@ -374,6 +414,10 @@ class Studio:
         breaking = a < self._breakdown_until
         self._vel_bias = (4.0 * self.streak.tier if self.cfg.game else 0.0) \
             + (8.0 if a < self._boost_until else 0.0)
+        # a recent body accent makes the next beats land harder (the lean).
+        if bar_step % self.cfg.steps_per_beat == 0 and self._lean > 0.5:
+            self._vel_bias += self._lean
+            self._lean *= 0.5
 
         # swing: odd 16ths sit late by the style's swing (identity feel).
         swing_t = step_t + (self.swing * beat_s / self.cfg.steps_per_beat
@@ -641,6 +685,39 @@ class Studio:
             self._boost_until = max(self._boost_until, a + 2 * bar)
         # appended last so the big banner reads the combo's name.
         self.fx.flashes.append(Flash(combo.name, combo.color, t, 0.9, True))
+
+    def _next_beat_t(self) -> Optional[float]:
+        """Wall time of the next grid BEAT (None before the grid starts)."""
+        if self._next_step_t is None:
+            return None
+        spb = self.cfg.steps_per_beat
+        step_s = self.latch.beat_s / spb
+        return self._next_step_t + ((-(self._abs_step + 1)) % spb) * step_s
+
+    def _accent_answer(self, t: float, strength: float) -> None:
+        """A STRONG movement (well above this dancer's own norm) gets an
+        immediate drum answer, snapped to the NEAREST 16th (<= ~60 ms shift:
+        in the pocket, still unmistakably yours). Rare by design -- a
+        punctuation, not a second drummer -- and tagged 'accent' so the
+        committed-groove metrics measure the pattern, not the punctuation."""
+        if not self.cfg.game or not self.arc.is_unlocked("drums"):
+            return
+        if strength < 0.6 or t - self._accent_last_t < 1.5 * self.latch.beat_s:
+            return
+        if not self.rack.audible(self.rack.get("drums")):
+            return
+        self._accent_last_t = t
+        tq = t
+        if self._next_step_t is not None:
+            step_s = self.latch.beat_s / self.cfg.steps_per_beat
+            prev_step = self._next_step_t - step_s
+            tq = prev_step if t - prev_step < self._next_step_t - t \
+                else self._next_step_t
+        piece = "snare" if strength > 0.75 else "hat"
+        vel = int(np.clip(56 + 52 * strength, 1, 120))
+        self._emit(MusicEvent("note_on", stemlib.CHANNELS["drums"],
+                              stemlib.DRUM_PIECE[piece], vel, dur=0.08,
+                              tag="accent"), tq)
 
     def _request_fill(self, t: float) -> None:
         """The fill budget: a drummer fills about once a phrase, not every

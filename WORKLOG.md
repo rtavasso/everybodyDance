@@ -509,6 +509,57 @@ listen should confirm "plain but musical"; phase-drift tempo correction could
 close the residual ~3% latch bias; live-path latency of exact-time scheduling
 unmeasured on gallery hardware (G7).
 
+## Entry 14 — the Downbeat update (phase: the body as an audio signal)
+Owner verdict: "sounds completely decoupled from movement — no downbeat on
+significant movements." Exact diagnosis: Entry 13 fixed TEMPO but the grid's
+PHASE was anchored at "whenever the session started" — accents landed between
+beats forever. Also answered the owner's model question: MediaPipe already
+streams realtime; the gap was interpretation, not estimation. The structure we
+were missing is treating the skeleton AS AN AUDIO SIGNAL (the "visual beats"
+idea, Davis & Agrawala 2018): an onset envelope + beat tracking, not joint
+angles.
+
+- **KineticFlux (groove.py)** — audio-style onset detection on the body: a
+  rectified, extremity-weighted multi-joint acceleration envelope with an
+  adaptive (z-score) threshold and refractory. A punch, stomp, plant, or arm
+  hit pops out of the dancer's own running statistics. Streaming, O(joints),
+  deterministic.
+- **PhaseServo (groove.py)** — the PLL that owns PHASE (the latch owns tempo):
+  each accent's signed error to the nearest beat enters a weighted circular
+  buffer; when accents agree (resultant R >= 0.5) the grid is nudged <= 4% of
+  a beat per beat (inaudible per step, converged in ~2 bars), with ONE hard
+  snap allowed early (the band starts on your hit). Incoherent accents are
+  never chased. Includes the integral term: persistent same-direction
+  corrections mean the tempo itself is off -> the latch trims sub-integer
+  (this closed the residual ~2-3% bias: the test groove now locks 119.9
+  against a true 120).
+- **The dig, not the top** — the pulse listener now detects bounce TROUGHS
+  (where a dancer marks the beat; also sharp where tops are plateaus -- this
+  alone moved median alignment from 0.29 to 0.10 beats). For smooth movers
+  with no sharp accents, the pulse feeds the servo too: the pulse IS the
+  accent.
+- **Accent answers + the lean** — a movement well above the dancer's own norm
+  gets an immediate drum answer snapped to the NEAREST 16th (<= ~60 ms: in the
+  pocket, unmistakably yours), budgeted (~one per 1.5 beats), tagged 'accent'
+  so the committed-groove metrics measure the pattern, not the punctuation.
+  Any accent also makes the next beats land harder (velocity lean, decaying).
+- **Provable**: `rhythm.on_pulse_pct` / `pulse_err_med_beats` — strong body
+  onsets vs the grid. Synthetic groove after settle: **82% on the downbeat,
+  median error 0.069 beats (~35 ms)**. Real video: right_dance 61.5% / 0.12
+  (that dancer's hits own the grid); benchmark 33% / 0.157 (syncopated mover;
+  the servo correctly holds back at low agreement). BOTH real sessions now
+  pass **13/13 SLOs**; bar similarity on real video improved to 0.63/0.70;
+  audio beat periodicity 6.1-6.6x the autocorrelation floor. 165/165 tests
+  (servo convergence on world-fixed accents, incoherence never chased,
+  downbeat-on-pulse studio proof, grid smoothness modulo deliberate
+  re-locks/snap).
+
+On the "different model" question, for the record: pose estimation already
+streams realtime (CPU); richer semantics (open-vocabulary move classification)
+would want a skeleton action model (ST-GCN-class) and is the next model-shaped
+step if heuristic gestures hit their ceiling — but phase alignment was an
+algorithm gap, not a model gap.
+
 ## Log
 (newest at bottom)
 

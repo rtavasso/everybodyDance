@@ -295,6 +295,19 @@ lock in and you earn the backbeat, the ghosts, the full motif, the arps, and
 the path to PEAK. Provable: `rhythm.*` SLOs (drum onsets ≥95 % within 12 ms
 of the grid, bar-vs-modal-groove similarity ≥0.5, ≤4 tempo re-locks).
 
+**The downbeat is yours (`KineticFlux` + `PhaseServo`).** The skeleton is
+treated as an audio signal: a rectified multi-joint acceleration envelope
+detects your accents like an audio onset detector (the "visual beats" idea),
+and a phase-locked loop pulls the grid onto them — tempo stays latched, phase
+servos by ≤4 % of a beat per beat (one hard snap at session start, an
+integral term that trims tempo bias, and incoherent accents are never
+chased). The pulse listener tracks the *dig* — the bottom of your bounce,
+where dancers mark time. Hits well above your own norm get an immediate
+answered drum accent in the pocket, and make the next beats land harder.
+Measured: 82 % of a steady dancer's onsets land on the downbeat (median error
+~35 ms); on real video, the tighter dancer's hits own the grid at 61 % while
+the syncopated one is deliberately not chased.
+
 **Sonic moves that push further** (all deterministic): a FIRE+ streak blooms
 lead notes into ascending chord-tone **arpeggio runs**; reaching PEAK fires
 **THE LIFT** — the whole world transposes up two semitones, locked loops
