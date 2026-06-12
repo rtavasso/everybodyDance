@@ -211,6 +211,59 @@ def test_studio_identity_applied_to_substrate_and_kit():
         assert stem.timbre == ident.kit[stem.name]
 
 
+def test_salience_cap_drops_constant_spam_but_keeps_triples():
+    n = int(20 * FPS)
+    # CLAP hammered twice a second for 20 s (a real dancer's incidental claps).
+    cmds = {i: ["CLAP"] for i in range(0, n, 15)}
+    st, be, last = _run(_groove(n), commands_at=cmds)
+    accepted = st._move_times["CLAP"]
+    # burst rule: never more than 4 accepted in any rolling 14 s window...
+    for k in range(len(accepted)):
+        win = [x for x in accepted if accepted[k] - 14.0 <= x <= accepted[k]]
+        assert len(win) <= 4
+    # ...and the x3 burst still got through fast enough to fire the combo.
+    assert "CLAP STORM" in [name for _, name in st.combo_log]
+
+
+def test_still_dwell_ignores_brief_dips_but_catches_freezes():
+    from test_studio import _still
+    n1, nd, n2 = int(6 * FPS), int(6 * FPS), int(3 * FPS)
+    groove = _groove(n1 + nd + n2)
+    brief = np.concatenate([groove[:n1], _still(6), groove[n1 + 6:]])  # 0.2 s dip
+    real = np.concatenate([groove[:n1], _still(nd), groove[:n2]])      # 6 s freeze
+    st_b, be_b, _ = _run(brief)
+    st_r, be_r, _ = _run(real)
+    # a 0.2 s dip never engages the gate -> no FREEZE wind-down fires;
+    # a real freeze fires it exactly once.
+    freezes_b = sum(1 for t, n in st_b.fx.log if n == "FREEZE")
+    freezes_r = sum(1 for t, n in st_r.fx.log if n == "FREEZE")
+    assert freezes_b == 0
+    assert freezes_r == 1
+
+
+def test_peak_lift_transposes_and_returns():
+    n = int(20 * FPS)
+    prof = _profile(_groove(n))
+    be = LogBackend()
+    st = Studio(be, prof)
+    base = st.sub.cfg.tonic
+    # energetic groove + named moves (PEAK deliberately needs the move push),
+    # then a long cool-down so the arc falls back out of peak.
+    seq = np.concatenate([_groove(n), _groove(int(14 * FPS), energy=0.05)])
+    moves = {i: ["JUMP" if (i // 45) % 2 == 0 else "CLAP"]
+             for i in range(30, n, 45)}
+    lifted_seen = False
+    for i, fr in enumerate(ArrayPoseSource(seq, fps=FPS, flip_y=False).frames()):
+        st.step(fr, moves.get(i, []))
+        if st.arc.section == "peak":
+            lifted_seen = True
+            assert st.sub.cfg.tonic == base + 2     # THE LIFT is in effect
+    st.panic()
+    assert lifted_seen
+    # cooled all the way down -> the lift has been undone.
+    assert st.arc.section != "peak" and st.sub.cfg.tonic == base
+
+
 def test_studio_determinism_with_game_on():
     cmds = {60: ["CLAP"], 66: ["CLAP"], 72: ["CLAP"], 150: ["STOMP"],
             156: ["STOMP"]}

@@ -50,6 +50,10 @@ GOLD = (60, 215, 255)                     # gold-move / GOLD-tier accent (BGR)
 TIER_COLOR = {"": (120, 120, 130), "WARM": (120, 200, 255),
               "FIRE": (80, 130, 255), "GOLD": GOLD}
 
+# Song-arc section -> the aurora's base tint (BGR, dusk-dark; heat scales it).
+SECTION_TINT = {"intro": (58, 28, 22), "groove": (52, 44, 18),
+                "build": (26, 40, 66), "peak": (66, 26, 70)}
+
 
 def mood_color(mood: str) -> tuple:
     return MOOD_COLOR.get(mood, DEFAULT_MOOD_COLOR)
@@ -118,8 +122,71 @@ class Stage:
 
     # -- centre stage ------------------------------------------------------
 
+    def _aurora(self, canvas, ui):
+        """Slow rolling colour bands behind everything: tinted by the song-arc
+        section, blended with the mood, brightened by heat. Pure function of
+        (ui, t) -- deterministic, and the whole room changes colour as the
+        song travels intro -> peak."""
+        g = getattr(ui, "game", None)
+        H = canvas.shape[0]
+        t = float(ui.t)
+        mood = np.array(mood_color(ui.mood), np.float32)
+        sec = np.array(SECTION_TINT.get(g.section if g else "groove",
+                                        (40, 36, 40)), np.float32)
+        heat = float(g.heat) if g else 0.3
+        ys = np.linspace(0.0, 1.0, H, dtype=np.float32)
+        band = 0.5 + 0.5 * np.sin(2 * np.pi * (ys * 1.5 - 0.10 * t))
+        band2 = 0.5 + 0.5 * np.sin(2 * np.pi * (ys * 2.3 + 0.06 * t) + 1.7)
+        glow = (0.07 + 0.13 * heat) * band + (0.04 + 0.08 * heat) * band2
+        col = 0.65 * sec + 0.35 * mood
+        add = glow[:, None, None] * col[None, None, :]
+        canvas[:] = np.clip(canvas.astype(np.float32) + add, 0,
+                            255).astype(np.uint8)
+
+    def _shockwaves(self, canvas, ui, cx, cy, w, h):
+        """Expanding rings from the dancer on every big flash (combos, drops,
+        PERFECT) -- the musical slam gets a physical blast wave."""
+        for f in ui.flashes:
+            if not getattr(f, "big", False):
+                continue
+            a = f.alpha(ui.t)
+            if a <= 0:
+                continue
+            prog = 1.0 - a
+            ov = canvas.copy()
+            for k in range(3):
+                r = int((prog * 1.1 + 0.14 * k) * min(w, h) * 0.62) + 8
+                cv2.circle(ov, (cx, cy), r, f.color, max(2, int(5 * a)),
+                           cv2.LINE_AA)
+            cv2.addWeighted(ov, 0.5 * a, canvas, 1 - 0.5 * a, 0, canvas)
+
+    def _confetti(self, canvas, ui):
+        """A deterministic golden confetti burst while a PERFECT! flash lives:
+        golden-angle scatter, per-particle fall speed and sway from k alone."""
+        W = int(self.W * 0.62)
+        for f in ui.flashes:
+            if f.name != "PERFECT!":
+                continue
+            age = float(np.clip((ui.t - f.t0) / max(f.ttl, 1e-6), 0.0, 1.0))
+            for k in range(40):
+                phi = k * 2.399963                       # golden angle
+                x = int(W * 0.5 + 0.42 * W * np.cos(phi)
+                        * (0.25 + 0.75 * ((k * 37) % 100) / 100.0))
+                speed = 180 + 3 * ((k * 53) % 100)
+                y = int(self.H * 0.22 + age * speed
+                        + 26 * np.sin(phi * 3 + age * 7))
+                col = (GOLD, (255, 255, 255),
+                       mood_color(ui.mood))[k % 3]
+                if 0 <= x < self.W and 0 <= y < self.H:
+                    cv2.circle(canvas, (x, y), 2 + (k % 2), col, -1,
+                               cv2.LINE_AA)
+
     def _draw_body(self, canvas, ui, x0, y0, w, h):
         col = mood_color(ui.mood)
+        g = getattr(ui, "game", None)
+        if g is not None and g.streak_tier == "GOLD":
+            # a GOLD streak gilds the dancer.
+            col = tuple(int(0.45 * c + 0.55 * gc) for c, gc in zip(col, GOLD))
         has = _has_skeleton(ui.live_xyz)
 
         # beat pulse: a ring expanding from the body on each beat edge.
@@ -136,6 +203,7 @@ class Stage:
             cv2.addWeighted(ov, 0.5 * self._pulse, canvas, 1 - 0.5 * self._pulse,
                             0, canvas)
         self._pulse *= 0.82
+        self._shockwaves(canvas, ui, cx, cy, w, h)
 
         if not has:
             self._trail.clear()
@@ -213,6 +281,14 @@ class Stage:
         cv2.rectangle(canvas, (bx, by), (bx + fill, by + bh), col, -1)
         cv2.putText(canvas, "VU", (bx, by + bh + 14), FONT, 0.36,
                     (140, 140, 150), 1, cv2.LINE_AA)
+        # note sparks: tiny deterministic glints while the lane is sounding.
+        if active and s.level > 0.1:
+            for k in range(4):
+                sx = x0 + 14 + ((int(ui.t * 90) * (k + 3) + k * 41)
+                                % max(w - 28, 1))
+                sy = y0 + 8 + ((k * 29 + int(ui.t * 60)) % 12)
+                cv2.circle(canvas, (sx, sy), 1 + (k % 2), _scaled(col, 0.9),
+                           -1, cv2.LINE_AA)
 
         # loop grid: onsets across the loop, playhead highlighted.
         gx0 = bx + bw + 24
@@ -365,23 +441,36 @@ class Stage:
 
     # -- whole-frame composition ------------------------------------------
 
-    def compose(self, camera_bgr, ui, perf, W=None, H=None):
+    def compose(self, camera_bgr, ui, perf, W=None, H=None,
+                draw_body=True, cam_gain=0.32):
+        """``draw_body=False`` + a high ``cam_gain`` is the session-film mode:
+        the real camera (with its own pose overlay) IS the dancer, so the
+        abstract centre-stage skeleton steps aside; pulses/shockwaves stay."""
         W = W or self.W
         H = H or self.H
         if (W, H) != (self.W, self.H):
             self.W, self.H = W, H
         canvas = np.empty((H, W, 3), np.uint8)
         canvas[:] = BG
+        self._aurora(canvas, ui)
 
         # left ~62%: the centre stage; right ~38%: the band lanes.
         stage_w = int(W * 0.62)
         # camera as a dim backdrop behind the dancer (if provided).
         if camera_bgr is not None:
             cam = cv2.resize(camera_bgr, (stage_w, H))
-            cam = (cam.astype(np.float32) * 0.32).astype(np.uint8)
+            cam = (cam.astype(np.float32) * float(cam_gain)).astype(np.uint8)
             canvas[:, :stage_w] = np.maximum(canvas[:, :stage_w], cam)
 
-        self._draw_body(canvas, ui, 30, 80, stage_w - 60, H - 200)
+        if draw_body:
+            self._draw_body(canvas, ui, 30, 80, stage_w - 60, H - 200)
+        else:
+            cx, cy = 30 + (stage_w - 60) // 2, 80 + (H - 200) // 2
+            if ui.beat and not self._last_beat:
+                self._pulse = 1.0
+            self._last_beat = bool(ui.beat)
+            self._pulse *= 0.82
+            self._shockwaves(canvas, ui, cx, cy, stage_w - 60, H - 200)
         _vignette(canvas)
 
         # band lanes on the right
@@ -400,6 +489,7 @@ class Stage:
         self._draw_challenge(canvas, ui)
         self._draw_identity(canvas, ui)
         self._draw_prompt(canvas, ui)
+        self._confetti(canvas, ui)
 
         # gold-move cards last, on top of everything (reuse viz.draw_flashes).
         if ui.flashes:

@@ -50,6 +50,9 @@ class StudioConfig:
     coupling: float = 0.4
     seed: int = 0
     motion_floor: float = 0.06   # normalized energy below this => stillness gate
+    still_dwell_s: float = 0.4   # low energy must HOLD this long to count as a
+                                 # freeze (real dancers dip through the floor
+                                 # constantly; a slow transition isn't a freeze)
     game: bool = True            # combos / streak / song arc / gold moves
     use_identity: bool = True    # Dance DNA: per-person key/scale/progression/kit
 
@@ -94,6 +97,7 @@ class StudioUI:
     mood: str
     beat: bool
     game: object = None          # GameUI snapshot, or None when game is off
+    still: bool = False          # the stillness gate's actual state this frame
 
 
 @dataclass
@@ -110,6 +114,16 @@ PROMPTS = ["JUMP -> fill", "T-POSE -> breakdown", "HANDS UP -> build",
 
 
 class Studio:
+    # SALIENCE CAP: a move a dancer makes constantly isn't a salient move any
+    # more -- it's how they dance, and the continuous layer already expresses
+    # it. Two rolling limits per move: a burst allowance (4 per 14 s -- keeps
+    # the x3 combos fully responsive) and a sustained rate (6 per 40 s, i.e.
+    # ~9/min -- holds real-dancer spam under the G4 <=20/min SLO).
+    MOVE_CAP = 4
+    MOVE_CAP_WINDOW = 14.0
+    MOVE_CAP_SUSTAIN = 6
+    MOVE_CAP_SUSTAIN_WINDOW = 40.0
+
     def __init__(self, backend: Backend, profile: Profile,
                  mapping: Optional[MappingConfig] = None,
                  cfg: Optional[StudioConfig] = None):
@@ -159,6 +173,7 @@ class Studio:
         self.gold = GoldMoveGame()
         self.combo_log: List = []                # [(t, combo name)]
         self.max_streak_tier = 0
+        self._move_times: dict = {}              # move -> accepted fire times
 
         # Loop grid + scheduler state.
         self._abs_step = -1
@@ -178,7 +193,9 @@ class Studio:
         self._breakdown_until = -1
         self._boost_until = -1        # combo payoff: everything denser/louder
         self._quake_until = -1        # combo payoff: bass an octave down, driven
+        self._lifted = False          # PEAK has transposed the world +2
         self._still = False           # are we in a stillness window?
+        self._still_since = None      # when energy first dipped under the floor
 
     # -- main step ---------------------------------------------------------
 
@@ -218,8 +235,22 @@ class Studio:
         for move in moves:
             self._apply_move(move, frame.t)
 
-        # 3) stillness / presence gate (the phantom fix)
-        gated = (sig["energy"] < self.cfg.motion_floor) or not present
+        # 3) stillness / presence gate (the phantom fix). An absent body gates
+        # instantly; a present body must hold under the floor for the dwell --
+        # debounced entry, instant release -- so real dancers dipping through
+        # the floor between moves don't flicker the gate (and re-fire the
+        # entering-stillness one-shots) twenty times a minute.
+        if not present:
+            gated = True
+            self._still_since = None
+        elif sig["energy"] < self.cfg.motion_floor:
+            if self._still_since is None:
+                self._still_since = frame.t
+            gated = (self._still
+                     or frame.t - self._still_since >= self.cfg.still_dwell_s)
+        else:
+            self._still_since = None
+            gated = False
 
         # 4) loop grid advance
         beat = bool(clk.beat)
@@ -269,14 +300,21 @@ class Studio:
         # bar line: the only place the song arc / gold schedule advance.
         if self.cfg.game and self._abs_step % steps_per_bar == 0:
             bar = self._abs_step // steps_per_bar
+            prev_section = self.arc.section
             for s in self.arc.on_bar():
                 self.fx.flashes.append(Flash(
                     f"{s.upper()} UNLOCKED", stemlib.STEM_COLOR[s],
                     self._t, 1.2, False))
             self.gold.on_bar(bar)
+            self._update_lift(prev_section)
 
         entering_still = gated and not self._still
         self._still = gated
+        # the wind-down: freezing mid-song earns a soft falling run -- the
+        # band audibly notices you stopped (then the phantom gate holds).
+        if (entering_still and self.cfg.game and self._abs_step > 0
+                and self.arc.is_unlocked("lead")):
+            self.fx.trigger("FREEZE", self._t)
         filling = (self._abs_step < self._fill_until)
         # streak tier pushes velocity: committing to the dance gets louder hits.
         vel_bias = 4.0 * self.streak.tier if self.cfg.game else 0.0
@@ -320,6 +358,19 @@ class Studio:
             if audible:
                 for ev in events:
                     self._emit(ev, self._t)
+                # FIRE+ streak: the lead blooms into an ascending chord-tone
+                # arpeggio -- committing to the dance audibly raises the music.
+                if (stem.name == "lead" and events and not gated
+                        and self.cfg.game and self.streak.tier >= 2):
+                    self._arp(stem, events[0], beat_s)
+                # fills get a 32nd-note hat ratchet on the off-beat 8ths.
+                if (filling and stem.name == "drums" and not gated
+                        and step % 4 == 2):
+                    for k in (1, 2):
+                        self._emit(MusicEvent(
+                            "note_on", stem.channel, stemlib.DRUM_PIECE["hat"],
+                            64 - 10 * k, dur=stemlib.DUR["drums"], tag="drums"),
+                            self._t + k * beat_s / 8.0)
 
     def _density(self, stem, sig, step) -> float:
         """Mapped density, modulated by the song arc + active gesture windows."""
@@ -348,6 +399,16 @@ class Studio:
     # -- gesture actions ---------------------------------------------------
 
     def _apply_move(self, move: str, t: float) -> None:
+        # Salience cap (see class consts): silently drop a move that's firing
+        # constantly -- on real dancers JUMP/PUNCH-like motion can trigger
+        # every other beat, which spams fills and drowns the deliberate moves.
+        times = self._move_times.setdefault(move, [])
+        times[:] = [x for x in times if t - x <= self.MOVE_CAP_SUSTAIN_WINDOW]
+        burst = sum(1 for x in times if t - x <= self.MOVE_CAP_WINDOW)
+        if burst >= self.MOVE_CAP or len(times) >= self.MOVE_CAP_SUSTAIN:
+            return
+        times.append(t)
+
         # Always flash so the stage can show any recognized/forced move.
         color, big = STYLE.get(move, ((230, 230, 230), False))
         self.fx.flashes.append(Flash(move, color, t, 0.5 if big else 0.4, big))
@@ -367,17 +428,17 @@ class Studio:
 
     def _gold_hit(self, t: float) -> None:
         """A gold-move challenge landed inside its window: PERFECT."""
-        self.fx.flashes.append(Flash("PERFECT!", GOLD_COLOR, t, 0.9, True))
         self.streak.observe_move(big=True)
         self.arc.bump(0.12)
         self._build_until = max(self._build_until,
                                 self._abs_step + self.cfg.steps_per_bar)
         self.fx.trigger("HANDS UP", t)             # the reward riser
+        # appended last so the big banner reads PERFECT!, not the fx name.
+        self.fx.flashes.append(Flash("PERFECT!", GOLD_COLOR, t, 0.9, True))
 
     def _apply_combo(self, combo, t: float) -> None:
         """A recognised move sequence: a big named payoff, same every time."""
         self.combo_log.append((t, combo.name))
-        self.fx.flashes.append(Flash(combo.name, combo.color, t, 0.9, True))
         self.streak.observe_move(big=True)
         self.arc.bump(0.15)
         bar = self.cfg.steps_per_bar
@@ -400,10 +461,12 @@ class Studio:
         elif p == "eclipse":                       # flip light <-> dark
             self._breakdown_until = max(self._breakdown_until, a + bar)
             self._eclipse_flip()
-        elif p == "knockout":
-            self.fx.trigger("PUNCH", t)
+        elif p == "knockout":                      # three ascending chord stabs
+            self.fx.trigger("KNOCKOUT", t)
             self._fill_until = max(self._fill_until, a + bar)
             self._boost_until = max(self._boost_until, a + 2 * bar)
+        # appended last so the big banner reads the combo's name.
+        self.fx.flashes.append(Flash(combo.name, combo.color, t, 0.9, True))
 
     def _eclipse_flip(self) -> None:
         """Toggle between this person's home scale and the mapping's dark mood."""
@@ -413,6 +476,51 @@ class Studio:
             self.sub.cfg.scale = to
             self.sub._scale = SCALES[to]
             self.mood = to
+
+    def _arp(self, stem, base_ev, beat_s: float) -> None:
+        """Two extra chord-tone steps above the lead note, staggered inside the
+        beat (scheduled sends, like fx one-shots, so loop buffers stay clean)."""
+        v = float(np.clip(stem.params.pitch, 0.0, 1.0))
+        step_s = max(beat_s / 8.0, 0.05)
+        for k in (1, 2):
+            note = self.sub.snap(min(1.0, v + 0.18 * k), stem.role,
+                                 chord_weighted=True)
+            note = self.sub.fold_into_range(
+                note + 12 * int(stem.params.register_octave),
+                stem.role.lo, stem.role.hi)
+            t = self._t + k * step_s
+            vel = max(40, int(base_ev.b) - 12 * k)
+            self.backend.send(MusicEvent("note_on", stem.channel, note, vel,
+                                         t=t, dur=0.12, tag="lead"))
+            self.backend.send(MusicEvent("note_off", stem.channel, note, 0,
+                                         t=t + 0.12, tag="lead"))
+
+    def _update_lift(self, prev_section: str) -> None:
+        """THE LIFT: reaching PEAK transposes the whole world up two semitones
+        (the classic modulation); cooling back down undoes it. Locked loop
+        buffers are transposed with it, so loops recorded before the lift stay
+        in key with everything else."""
+        now = self.arc.section
+        if now == prev_section:
+            return
+        if now == "peak" and not self._lifted:
+            self._transpose(+2)
+            self._lifted = True
+            self.fx.flashes.append(Flash("THE LIFT", GOLD_COLOR, self._t,
+                                         0.8, False))
+        elif prev_section == "peak" and self._lifted:
+            self._transpose(-2)
+            self._lifted = False
+
+    def _transpose(self, semis: int) -> None:
+        self.sub.cfg.tonic += semis
+        for stem in self.rack:
+            if stem.channel == 10:
+                continue
+            for slot in stem.buffer:
+                for ev in slot:
+                    if ev.kind in ("note_on", "note_off"):
+                        ev.a = int(np.clip(ev.a + semis, 0, 127))
 
     def _do_action(self, g, t: float) -> None:
         action, target, params = g.action, g.target, g.params
@@ -518,7 +626,8 @@ class Studio:
             energy=float(sig["energy"]), live_xyz=live, stems=stem_ui,
             playhead=int(self.master_step), loop_steps=int(self.cfg.loop_steps),
             flashes=list(self.fx.active_flashes(frame.t)), prompt=prompt,
-            mood=self.mood, beat=bool(beat), game=self._game_ui())
+            mood=self.mood, beat=bool(beat), game=self._game_ui(),
+            still=bool(gated))
 
     def _game_ui(self) -> Optional[GameUI]:
         if not self.cfg.game:

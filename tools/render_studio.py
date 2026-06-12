@@ -189,7 +189,7 @@ def replay(xyz: np.ndarray, fps: float, flip: bool, *, scripted: bool,
     per_frame: List[Tuple[np.ndarray, List[Flash]]] = []
     fired: List[Tuple[float, str]] = []
     proc_ms: List[float] = []
-    mv = {k: [] for k in ("energy", "core", "limb", "open", "comh")}
+    mv = {k: [] for k in ("energy", "core", "limb", "open", "comh", "norm_e", "gated")}
     # the active (tonic, scale) over time -- scale_shift / ECLIPSE move it, and
     # the in-scale metric judges each note against the scale active at its t.
     segments: List[Tuple[float, int, str]] = [
@@ -207,6 +207,8 @@ def replay(xyz: np.ndarray, fps: float, flip: bool, *, scripted: bool,
         mv["limb"].append(f.limb_energy_env)
         mv["open"].append(f.openness)
         mv["comh"].append(f.com_height)
+        mv["norm_e"].append(float(out.ui.energy))
+        mv["gated"].append(1.0 if out.ui.still else 0.0)
 
         if (studio.sub.cfg.tonic, studio.sub.cfg.scale) != segments[-1][1:]:
             segments.append((fr.t, studio.sub.cfg.tonic, studio.sub.cfg.scale))
@@ -218,9 +220,13 @@ def replay(xyz: np.ndarray, fps: float, flip: bool, *, scripted: bool,
         # Record every recognised/forced move that flashed this frame (those
         # newly-added flashes whose t0 == this frame's t). Game flashes (combo
         # names, PERFECT!, unlock toasts) are not moves -- keep them out of the
-        # recognition/spam metrics.
+        # recognition/spam metrics -- and an fx re-flash of the same move name
+        # at the same t is one fire, not two.
+        seen = set()
         for fl in out.ui.flashes:
-            if abs(fl.t0 - fr.t) < 1e-9 and fl.name in GESTURE_LIBRARY:
+            if (abs(fl.t0 - fr.t) < 1e-9 and fl.name in GESTURE_LIBRARY
+                    and fl.name not in seen):
+                seen.add(fl.name)
                 fired.append((fr.t, fl.name))
     studio.panic()
 
@@ -476,6 +482,22 @@ def compute_metrics(r, labels) -> dict:
     music = {"density": counts,
              "velocity": M._bin([t for t, _ in vel], [v for _, v in vel], nb, dur),
              "pitch": M._bin([t for t, _ in pit], [p for _, p in pit], nb, dur)}
+    # phantom is judged against the gate's ACTUAL state: bins that sat fully
+    # under the stillness gate (>90% of frames), EXCLUDING each engagement bin
+    # -- the design sanctions exactly one freeze acknowledgement there (the
+    # wind-down + breath chord, caused by the freeze itself). Onsets in any
+    # later gated bin are true leakage: sound while the gate held.
+    gb = M._bin(times, r["mv"]["gated"], nb, dur) > 0.9
+    edge = gb & ~np.roll(gb, 1)
+    if gb.size:
+        edge[0] = gb[0]
+    still_mask = gb & ~edge
+    # fx one-shots are by construction move-caused (a punch from a standing
+    # dancer is causation, not phantom) -- exclude them from the leak check.
+    counts_nonfx = np.zeros(nb)
+    for e in events:
+        if e.kind == "note_on" and e.tag != "fx":
+            counts_nonfx[min(int(e.t / dur * nb), nb - 1)] += 1
 
     sub = r["sub"]
     # per-stem activity (note_on counts per stem tag) -> proves multi-stem alive.
@@ -508,7 +530,8 @@ def compute_metrics(r, labels) -> dict:
                             "progression": list(st.identity.progression)}
 
     return {
-        "coupling": M.coupling(move, music),
+        "coupling": M.coupling(move, music, still_mask=still_mask,
+                               still_density=counts_nonfx),
         "musicality": M.musicality(events, sub.cfg.tonic, sub.cfg.scale, dur / 60,
                                    segments=r.get("segments")),
         "liveliness": M.liveliness(events, dur),

@@ -253,6 +253,39 @@ compressor + soft limiter) glues it. Pads voice the 7th when your body opens.
 The **live** synth routes each stem to the same rich timbre presets (cached per
 note), so the gallery instrument sounds like the offline render.
 
+**Proven on real dancers, on film.** `tools/render_session.py` runs a real
+dance video end to end — MediaPipe pose estimation → calibration → the full
+Studio with the game layer live (the recognizer fires whatever moves the real
+dancer actually makes) — and films it: the gallery stage with the original
+footage as backdrop, the glowing skeleton tracked **on the dancer**, plus the
+stereo render muxed in:
+
+```bash
+bash scripts/get_data.sh                       # fetches the dance videos + model
+uv run python tools/extract_pose.py data/videos/benchmark_dance.mp4 -o data/poses/benchmark_dance.npz
+uv sync --group video                          # bundled ffmpeg for the mux
+uv run python -m tools.render_session data/poses/benchmark_dance.npz \
+    --video data/videos/benchmark_dance.mp4 --out out/session
+```
+
+On the benchmark dancer: identity **SOLAR COMET** (E phrygian · neon kit), the
+full arc travelled, all five stems earned, a GOLD streak, an EARTHQUAKE combo,
+a gold-move PERFECT — **all ten SLOs pass on real video** (coupling 0.40,
+phantom 0.0, in-scale 100 %). Real data also drove three engine hardenings: a
+per-move **salience cap** (a move made constantly isn't a salient move), a
+**dwell-debounced stillness gate** (a slow transition isn't a freeze), and a
+phantom metric judged against the gate's actual state.
+
+**Sonic moves that push further** (all deterministic): a FIRE+ streak blooms
+lead notes into ascending chord-tone **arpeggio runs**; reaching PEAK fires
+**THE LIFT** — the whole world transposes up two semitones, locked loops
+included, and settles back as you cool; the texture lane plays **polyrhythms**
+(3/5-pulse euclidean against the 4/4, phasing per bar); fills get 32nd-note
+hat ratchets; truly freezing earns a soft falling **wind-down** before the
+silence. On screen: a section-tinted aurora, shockwave rings on every big hit,
+golden confetti on PERFECT!, and a dancer who literally gilds gold at GOLD
+streak.
+
 **Customizable everything.** A declarative `MappingConfig` (JSON) binds movement
 signals and gestures to per-stem targets and discrete actions — edit it and the
 instrument changes (`tools.studio_live --mapping my_map.json`):

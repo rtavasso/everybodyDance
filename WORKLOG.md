@@ -389,6 +389,62 @@ Open: live feel of unlock pacing + gold windows needs a real webcam session
 (can't run cameras here); first render of a long pad live costs ~tens of ms
 before its cache entry exists (pre-warm if it ever audibly hiccups).
 
+## Entry 12 — real video end to end + the session film + sonic/visual push
+Direction: prove it on REAL dancers (video -> pose estimation -> the full
+instrument), film the result, and push sonic + visual creativity further.
+
+- **Real data acquired + extracted.** Fetched the two full-body dance videos
+  (benchmark_dance / right_dance, 406x718@30, 21.3 s, single dancer) + the
+  MediaPipe pose_landmarker model; `tools/extract_pose.py` -> npz at **100 %
+  detection** (wrists ≥ .85, ankles ≥ .90).
+- **tools/render_session.py — the session film.** npz/BVH -> calibrate ->
+  full Studio (game + identity live, recognizer firing from the REAL moves, no
+  scripted commands) -> every frame through the Stage with the original video
+  as backdrop and the **glowing skeleton drawn in image space ON the dancer**
+  (the visible proof pose estimation drives everything) -> stereo WAV -> muxed
+  session.mp4 (imageio-ffmpeg, optional `video` dep group) + metrics/pianoroll.
+- **What real data immediately broke (and the fixes, all in the engine):**
+  1. *Gesture spam*: PUNCH fired 42x/21 s (energetic arms trip the velocity
+     predicate constantly) -> the **salience cap**: per-move rolling limits
+     (burst 4/14 s — keeps x3 combos; sustained 6/40 s ≈ 9/min). A move made
+     constantly isn't a salient move; the continuous layer already expresses it.
+  2. *Stillness-gate flicker*: real dancers dip under the energy floor between
+     moves ~20x/min, re-firing the entering-stillness one-shots -> **dwell
+     debounce** (`still_dwell_s` 0.4 s to engage, instant release).
+  3. *Phantom metric honesty*: now judged against the **gate's actual state**
+     (binned >90 % gated), excluding each engagement bin (which hosts the
+     sanctioned freeze acknowledgement) and excluding fx one-shots (move-caused
+     by construction — a punch from a standing dancer is causation, not
+     phantom). Corpus keeps a real still window so the gate stays proven.
+- **Results on real dancers:** benchmark_dance — identity SOLAR COMET
+  (E phrygian/neon), full arc, 5/5 stems earned, GOLD streak, EARTHQUAKE combo,
+  1/1 gold-move hit, coupling 0.40, phantom 0.0, in-scale 100 %: **all ten
+  SLOs pass on real video.** right_dance (same performer, 2nd take) — TURBO
+  PULSE (D phrygian), SUPERNOVA combo, 9/10 (coupling 0.319 vs 0.35 — honest
+  marginal miss on a flatter-energy take). Similar identities for the same
+  body = the system being faithful.
+- **Sonic push:** FIRE+ streak turns lead notes into ascending chord-tone
+  **arpeggio runs**; **THE LIFT** — reaching PEAK transposes the whole world
+  +2 semitones (locked loop buffers transposed with it; undone on cool-down);
+  **polyrhythmic texture** (3- or 5-pulse euclidean against the 4/4, rotating
+  per bar); KNOCKOUT = three ascending chord stabs; **freeze wind-down** (a
+  soft falling run the moment you truly freeze); 32nd-note **hat ratchets**
+  inside fills. All deterministic; in-scale stays 100 % via the segment-aware
+  metric (tonic changes are part of the timeline).
+- **Visual push (stage.py):** section-tinted **aurora** background (heat-
+  brightened, rolling bands); **shockwave rings** from the dancer on every big
+  flash; deterministic golden-angle **confetti** on PERFECT!; lane note-sparks;
+  the dancer **gilds gold** at GOLD streak. Session-film mode: compose(draw_
+  body=False, cam_gain=0.85) — the real camera + image-space glow IS the
+  dancer.
+- 150/150 tests (salience cap, dwell debounce, peak lift round-trip). Corpus
+  bundle still 10/10 SLOs, byte-deterministic.
+
+Open: right_dance coupling 0.319 (threshold 0.35) — flat-energy takes correlate
+less; consider energy-derivative coupling features. Session films render ~2x
+realtime offline; live stage cost of aurora/shockwaves unmeasured on gallery
+hardware (G7 probe still open).
+
 ## Log
 (newest at bottom)
 

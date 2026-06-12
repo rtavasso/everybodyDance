@@ -28,6 +28,9 @@ everybodydance = "run:main"
 dev = ["pytest>=7"]
 # The LLM-judge grader (opt-in): `uv sync --group eval`.
 eval = ["anthropic>=0.40"]
+# Audio/video muxing for tools/render_session session films (bundled ffmpeg):
+# `uv sync --group video`.
+video = ["imageio-ffmpeg>=0.5"]
 
 [build-system]
 requires = ["hatchling"]

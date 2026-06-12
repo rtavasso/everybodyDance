@@ -27,6 +27,8 @@ STYLE: Dict[str, Tuple[Tuple[int, int, int], bool]] = {
     "ARMS CROSSED": ((200, 160, 255), False),
     "RAISE LEFT": ((120, 255, 160), False),
     "RAISE RIGHT": ((160, 220, 255), False),
+    "KNOCKOUT": ((90, 90, 255), True),
+    "FREEZE": ((255, 220, 170), False),
 }
 DEFAULT_STYLE = ((230, 230, 230), False)
 
@@ -108,6 +110,14 @@ class EffectEngine:
 
     def _fx_squat(self, t):      # bass drop
         self._note(1, self._snap(0.05, "bass"), 122, 0.8, t)
+
+    def _fx_knockout(self, t):   # three ascending chord stabs (the combo K.O.)
+        for k, base in enumerate((0.35, 0.55, 0.75)):
+            for v in (base, base + 0.1, base + 0.2):
+                self._note(2, self._snap(v, "chord"), 112, 0.2, t + 0.14 * k)
+
+    def _fx_freeze(self, t):     # the wind-down: a soft falling run as you freeze
+        self._run("lead", 3, [0.7, 0.5, 0.3], t, step=0.07, dur=0.14, vel=58)
 
     def _fx_default(self, t):
         self._note(2, self._snap(0.5, "chord"), 100, 0.2, t)

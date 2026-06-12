@@ -38,8 +38,21 @@ def _corr(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.corrcoef(a, b)[0, 1])
 
 
-def coupling(move: Dict[str, np.ndarray], music: Dict[str, np.ndarray]) -> Dict:
-    """Correlation matrix between movement and music feature series + summary."""
+def coupling(move: Dict[str, np.ndarray], music: Dict[str, np.ndarray],
+             still_mask: Optional[np.ndarray] = None,
+             still_density: Optional[np.ndarray] = None) -> Dict:
+    """Correlation matrix between movement and music feature series + summary.
+
+    ``still_mask`` (binned bool) marks the bins the engine's own stillness gate
+    considered still -- the honest basis for `phantom`. A real dancer's quiet
+    *transitions* are not freezes: without the mask we fall back to the
+    relative low-energy decile (right for the synthetic corpus, which contains
+    a true stillness window; pessimistic for continuous real dance).
+
+    ``still_density`` optionally replaces ``music['density']`` for the phantom
+    check only -- pass a density series with move-caused one-shots (fx)
+    excluded, since phantom exists to catch the GRID manufacturing notes
+    without movement, not a deliberate punch from a standing-still dancer."""
     matrix = {m: {k: round(_corr(move[k], music[m]), 3) for k in move} for m in music}
     # each musical dimension should be explained by *some* movement signal
     per_music = {m: max((abs(v) for v in row.values()), default=0.0)
@@ -49,11 +62,15 @@ def coupling(move: Dict[str, np.ndarray], music: Dict[str, np.ndarray]) -> Dict:
     energy = move.get("energy", np.zeros(1))
     density = music.get("density", np.zeros(1))
     hi = energy > np.percentile(energy, 66) if energy.size else np.array([False])
-    lo = energy < np.percentile(energy, 10) if energy.size else np.array([False])
+    if still_mask is not None:
+        lo = np.asarray(still_mask, bool)
+    else:
+        lo = energy < np.percentile(energy, 10) if energy.size else np.array([False])
     dead = float(np.mean(density[hi] == 0)) if hi.any() else 0.0      # move, no music
-    phantom = float(np.mean(density[lo] > 0)) if lo.any() else 0.0    # music, no move
+    pd = density if still_density is None else np.asarray(still_density)
+    phantom = float(np.mean(pd[lo] > 0)) if lo.any() else 0.0         # music, no move
     return {"matrix": matrix, "score": score, "dead_zone": round(dead, 3),
-            "phantom": round(phantom, 3)}
+            "phantom": round(phantom, 3), "still_bins": int(lo.sum())}
 
 
 def musicality(events, tonic: int, scale: str, minutes: float,

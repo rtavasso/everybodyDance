@@ -24,7 +24,7 @@ import numpy as np
 
 from .mapping import StemParams
 from .output import MusicEvent
-from .substrate import Substrate, TrackRole
+from .substrate import Substrate, TrackRole, euclidean
 
 # Stem -> MIDI channel (drums on 10 GM-style). The order is the stem order.
 CHANNELS: Dict[str, int] = {"drums": 10, "bass": 1, "keys": 2, "lead": 3,
@@ -190,7 +190,16 @@ def generate(stem: Stem, sub: Substrate, step: int, steps_per_bar: int,
                                   dur=DUR["drums"], tag="drums"))
         return out
 
-    pat = sub.pattern(stem.role.name, density)
+    if stem.name == "texture":
+        # POLYRHYTHM: a 3- or 5-pulse euclidean over the bar (against the 4/4
+        # everyone else plays), rotated per bar so it phases -- the ambient
+        # lane orbits the beat instead of doubling it.
+        pulses = 0 if density <= 0.0 else (3 if density < 0.66 else 5)
+        base = euclidean(pulses, steps_per_bar)
+        rot = ((step // steps_per_bar) % 4) * 2
+        pat = base[rot:] + base[:rot]
+    else:
+        pat = sub.pattern(stem.role.name, density)
     if not pat[bar_step]:
         return out
 
