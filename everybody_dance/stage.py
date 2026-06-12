@@ -40,10 +40,15 @@ XR, YR = (-1.5, 1.5), (-2.3, 1.6)
 MOOD_COLOR = {
     "major": (120, 230, 255), "major_pentatonic": (140, 240, 255),
     "lydian": (200, 255, 200), "dorian": (255, 210, 120),
+    "mixolydian": (160, 230, 255),
     "minor": (255, 170, 120), "minor_pentatonic": (255, 160, 150),
     "phrygian": (220, 130, 255),
 }
 DEFAULT_MOOD_COLOR = (220, 220, 235)
+
+GOLD = (60, 215, 255)                     # gold-move / GOLD-tier accent (BGR)
+TIER_COLOR = {"": (120, 120, 130), "WARM": (120, 200, 255),
+              "FIRE": (80, 130, 255), "GOLD": GOLD}
 
 
 def mood_color(mood: str) -> tuple:
@@ -179,6 +184,15 @@ class Stage:
 
     def _draw_lane(self, canvas, s, ui, x0, y0, w, h):
         col = tuple(int(c) for c in s.color)
+        if getattr(s, "locked", False):
+            # a stem the song arc hasn't unlocked yet: dim, with the invitation.
+            cv2.rectangle(canvas, (x0, y0), (x0 + w, y0 + h), PANEL, -1)
+            cv2.rectangle(canvas, (x0, y0), (x0 + w, y0 + h), (52, 48, 60), 1)
+            cv2.putText(canvas, s.name.upper(), (x0 + 12, y0 + 24), FONT, 0.62,
+                        _scaled(col, 0.35), 2, cv2.LINE_AA)
+            cv2.putText(canvas, "LOCKED - keep dancing", (x0 + 12, y0 + h // 2 + 12),
+                        FONT, 0.5, (110, 106, 120), 1, cv2.LINE_AA)
+            return
         active = s.active or s.level > 0.05
         cv2.rectangle(canvas, (x0, y0), (x0 + w, y0 + h), PANEL, -1)
         edge = col if active else _scaled(col, 0.4)
@@ -264,6 +278,73 @@ class Stage:
             cv2.putText(canvas, perf["note"], (W - tw - 24, H - 16), FONT, 0.48,
                         (150, 150, 160), 1, cv2.LINE_AA)
 
+    # -- game layer: arc / streak / gold-move / identity --------------------
+
+    def _draw_game(self, canvas, ui):
+        """Section tracker + streak meter, top-centre of the stage half."""
+        g = getattr(ui, "game", None)
+        if g is None:
+            return
+        cx = int(self.W * 0.62) // 2 + 60        # clear of the title block
+        labels = [s.upper() for s in g.sections]
+        widths = [cv2.getTextSize(l, FONT, 0.48, 1)[0][0] for l in labels]
+        total = sum(widths) + 22 * (len(labels) - 1)
+        x = cx - total // 2
+        for label, lw, name in zip(labels, widths, g.sections):
+            cur = (name == g.section)
+            col = mood_color(ui.mood) if cur else (104, 100, 114)
+            cv2.putText(canvas, label, (x, 36), FONT, 0.48, col,
+                        2 if cur else 1, cv2.LINE_AA)
+            if cur:
+                cv2.line(canvas, (x, 42), (x + lw, 42), col, 2, cv2.LINE_AA)
+            x += lw + 22
+
+        bw, bh = 220, 7
+        bx, by = cx - bw // 2, 50
+        tcol = TIER_COLOR.get(g.streak_tier, TIER_COLOR[""])
+        cv2.rectangle(canvas, (bx, by), (bx + bw, by + bh), (50, 46, 56), 1)
+        fill = int(bw * float(np.clip(g.streak, 0, 1)))
+        if fill > 0:
+            cv2.rectangle(canvas, (bx, by), (bx + fill, by + bh), tcol, -1)
+        if g.streak_tier:
+            cv2.putText(canvas, g.streak_tier, (bx + bw + 10, by + bh + 1),
+                        FONT, 0.45, tcol, 1, cv2.LINE_AA)
+
+    def _draw_challenge(self, canvas, ui):
+        """The gold-move card: announce ('GET READY'), then the timed window."""
+        g = getattr(ui, "game", None)
+        if (g is None or not g.challenge_move
+                or g.challenge_state not in ("announce", "window")):
+            return
+        w, h = 240, 66
+        x1 = int(self.W * 0.62) - 40
+        x0, y0 = x1 - w, 86
+        live = g.challenge_state == "window"
+        cv2.rectangle(canvas, (x0, y0), (x1, y0 + h), (30, 30, 24), -1)
+        cv2.rectangle(canvas, (x0, y0), (x1, y0 + h), GOLD, 3 if live else 1)
+        head = "* GOLD MOVE -- NOW!" if live else "* GOLD MOVE  get ready"
+        cv2.putText(canvas, head, (x0 + 10, y0 + 20), FONT, 0.42,
+                    GOLD if live else (180, 180, 190), 1, cv2.LINE_AA)
+        cv2.putText(canvas, g.challenge_move, (x0 + 10, y0 + 48), FONT, 0.85,
+                    GOLD, 2, cv2.LINE_AA)
+        # time draining out of the phase, right-to-left
+        rem = int(w * float(np.clip(1.0 - g.challenge_frac, 0, 1)))
+        cv2.rectangle(canvas, (x0, y0 + h - 5), (x0 + rem, y0 + h - 2), GOLD, -1)
+
+    def _draw_identity(self, canvas, ui):
+        """The Dance-DNA card: this visitor's stage name + sonic world."""
+        g = getattr(ui, "game", None)
+        if g is None or not g.identity_name:
+            return
+        x0, y1 = 24, self.H - 36
+        col = tuple(int(c) for c in g.identity_color)
+        cv2.putText(canvas, "YOUR SOUND", (x0, y1 - 38), FONT, 0.38,
+                    (150, 150, 160), 1, cv2.LINE_AA)
+        cv2.putText(canvas, g.identity_name, (x0, y1 - 16), FONT, 0.72, col,
+                    2, cv2.LINE_AA)
+        cv2.putText(canvas, g.identity_tagline, (x0, y1 + 2), FONT, 0.45,
+                    (175, 175, 185), 1, cv2.LINE_AA)
+
     def _draw_prompt(self, canvas, ui):
         """Onboarding hint: surface the cycling prompt when idle/low-energy."""
         if not ui.prompt:
@@ -315,6 +396,9 @@ class Stage:
                     (160, 160, 170), 1, cv2.LINE_AA)
 
         self._draw_hud(canvas, ui, perf)
+        self._draw_game(canvas, ui)
+        self._draw_challenge(canvas, ui)
+        self._draw_identity(canvas, ui)
         self._draw_prompt(canvas, ui)
 
         # gold-move cards last, on top of everything (reuse viz.draw_flashes).

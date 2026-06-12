@@ -108,8 +108,14 @@ def main():
     def start_studio(prof):
         if backend:
             backend.panic()
-        state["studio"] = Studio(backend or _Null(), prof, mapping, studio_cfg)
+        studio = Studio(backend or _Null(), prof, mapping, studio_cfg)
+        state["studio"] = studio
         state["phase"] = "play"
+        # Route each stem to its (identity-kit) timbre so the live band sounds
+        # like the offline render; the per-frame sync below follows morphs.
+        if backend and hasattr(backend, "set_preset"):
+            for stem in studio.rack:
+                backend.set_preset(stem.name, stem.timbre or stem.params.timbre)
 
     writer = [None]                       # 1-elem list so _show can lazily fill it
     fps_ema, last = 0.0, time.time()
@@ -180,6 +186,9 @@ def main():
                     out = state["studio"].step(pf, commands)
                     ui = out.ui
                     state["_last_ui"] = ui
+                    if backend and hasattr(backend, "set_preset"):
+                        for name, a in out.automation.items():
+                            backend.set_preset(name, a.get("timbre", ""))
 
             dt = now - last
             last = now

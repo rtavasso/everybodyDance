@@ -44,9 +44,12 @@ def test_music_wav_written_and_nonempty(tmp_path):
     assert wav.exists()
     with wave.open(str(wav)) as w:
         assert w.getnframes() > 0
-        assert w.getnchannels() == 1
+        assert w.getnchannels() == 2           # the render is stereo now
         data = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
     assert np.isfinite(data).all() and int(np.abs(data).max()) > 0
+    # the stereo image is real: channels differ (panned stems / spread).
+    lr = data.reshape(-1, 2)
+    assert int(np.abs(lr[:, 0].astype(np.int32) - lr[:, 1].astype(np.int32)).max()) > 0
 
 
 def test_metrics_have_required_keys_and_in_scale_100():

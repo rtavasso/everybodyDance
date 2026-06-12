@@ -29,7 +29,10 @@ import numpy as np
 from . import stems as stemlib
 from .effects import STYLE, EffectEngine, Flash
 from .features import FeatureExtractor
+from .game import (GOLD_COLOR, SECTIONS, ComboTracker, GameUI, GoldMoveGame,
+                   SongArc, StreakMeter)
 from .gestures import GestureRecognizer, build_gestures
+from .identity import derive_identity
 from .laban import LabanEstimator
 from .mapping import MappingConfig, MappingResolver
 from .oscillator import EntrainedClock
@@ -47,6 +50,8 @@ class StudioConfig:
     coupling: float = 0.4
     seed: int = 0
     motion_floor: float = 0.06   # normalized energy below this => stillness gate
+    game: bool = True            # combos / streak / song arc / gold moves
+    use_identity: bool = True    # Dance DNA: per-person key/scale/progression/kit
 
     @property
     def steps_per_bar(self) -> int:
@@ -70,6 +75,7 @@ class StemUI:
     cutoff: float
     onsets: list
     timbre: str
+    locked: bool = False         # song-arc unlock state (game layer)
 
 
 @dataclass
@@ -87,6 +93,7 @@ class StudioUI:
     prompt: object
     mood: str
     beat: bool
+    game: object = None          # GameUI snapshot, or None when game is off
 
 
 @dataclass
@@ -97,7 +104,9 @@ class StudioOut:
 
 # A small cycling onboarding hint -> shown until the body is dancing.
 PROMPTS = ["JUMP -> fill", "T-POSE -> breakdown", "HANDS UP -> build",
-           "SQUAT -> loop bass", "ARMS CROSSED -> dark mood", "CLAP -> snare"]
+           "SQUAT -> loop bass", "ARMS CROSSED -> dark mood", "CLAP -> snare",
+           "SQUAT then JUMP -> SUPERNOVA", "CLAP x3 -> CLAP STORM",
+           "STOMP x2 -> EARTHQUAKE"]
 
 
 class Studio:
@@ -114,6 +123,17 @@ class Studio:
         self.sub.cfg.steps_per_beat = self.cfg.steps_per_beat
         self.sub.cfg.beats_per_bar = self.cfg.beats_per_bar
 
+        # Dance DNA: this person's key / mode / progression / kit / stage name.
+        # Rides on top of biased_config (which keeps roles/densities) and
+        # overrides the harmonic choices, so every visitor gets their own world.
+        self.identity = (derive_identity(profile.signature)
+                         if self.cfg.use_identity else None)
+        if self.identity is not None:
+            self.sub.cfg.tonic = self.identity.tonic
+            self.sub.cfg.scale = self.identity.scale
+            self.sub._scale = SCALES[self.identity.scale]
+            self.sub.cfg.harmonic_field = list(self.identity.progression)
+
         # Upstream signal stack.
         self.features = FeatureExtractor()
         self.laban = LabanEstimator()
@@ -122,11 +142,23 @@ class Studio:
         self.norm = Normalizer(profile)
         self.rng = np.random.default_rng(self.cfg.seed)
 
-        # Stems + the gesture/effects layers.
+        # Stems + the gesture/effects layers. The identity's kit takes
+        # precedence over the mapping's default timbres (timbre_morph still
+        # overrides either later).
         timbres = {m.stem: m.timbre for m in self.mapping.stems}
+        if self.identity is not None:
+            timbres.update(self.identity.kit)
         self.rack = stemlib.StemRack(self.sub, self.cfg.loop_steps, timbres)
         self.recognizer = GestureRecognizer(build_gestures())
         self.fx = EffectEngine(self.backend, self.sub)
+
+        # The game layer: combos, streak, the song arc, gold-move challenges.
+        self.combos = ComboTracker()
+        self.streak = StreakMeter()
+        self.arc = SongArc()
+        self.gold = GoldMoveGame()
+        self.combo_log: List = []                # [(t, combo name)]
+        self.max_streak_tier = 0
 
         # Loop grid + scheduler state.
         self._abs_step = -1
@@ -136,6 +168,7 @@ class Studio:
         self._t = 0.0
         self.bpm = 0.0
         self.mood = self.sub.cfg.scale
+        self._base_scale = self.sub.cfg.scale     # ECLIPSE flips back to this
         self._prompt_idx = 0
 
         # transient gesture windows (in abs_step units), like looper.py
@@ -143,6 +176,8 @@ class Studio:
         self._build_until = -1
         self._drop_until = -1
         self._breakdown_until = -1
+        self._boost_until = -1        # combo payoff: everything denser/louder
+        self._quake_until = -1        # combo payoff: bass an octave down, driven
         self._still = False           # are we in a stillness window?
 
     # -- main step ---------------------------------------------------------
@@ -161,10 +196,21 @@ class Studio:
 
         # 1) continuous per-stem targets
         params = self.resolver.resolve_continuous(sig)
+        if self._abs_step < self._quake_until:        # EARTHQUAKE payoff window
+            qp = params.get("bass")
+            if qp is not None:
+                qp.register_octave -= 1
+                qp.drive = float(min(1.0, qp.drive + 0.35))
         for stem in self.rack:
             stem.params = params[stem.name]
             if stem.timbre == "":
                 stem.timbre = stem.params.timbre
+
+        # game: heat / streak integrate every frame (moves arrive below)
+        if self.cfg.game:
+            self.streak.update(feats.dt, sig["energy"])
+            self.arc.update_frame(feats.dt, sig["energy"], self.streak.heat)
+            self.max_streak_tier = max(self.max_streak_tier, self.streak.tier)
 
         # 2) gestures: recognized + force-fired commands -> actions + flashes
         moves = [g.name for g in self.recognizer.update(frame, feats)]
@@ -220,9 +266,22 @@ class Studio:
         beat_s = 60.0 / max(clk.bpm, 1.0)
         steps_per_bar = self.cfg.steps_per_bar
 
+        # bar line: the only place the song arc / gold schedule advance.
+        if self.cfg.game and self._abs_step % steps_per_bar == 0:
+            bar = self._abs_step // steps_per_bar
+            for s in self.arc.on_bar():
+                self.fx.flashes.append(Flash(
+                    f"{s.upper()} UNLOCKED", stemlib.STEM_COLOR[s],
+                    self._t, 1.2, False))
+            self.gold.on_bar(bar)
+
         entering_still = gated and not self._still
         self._still = gated
         filling = (self._abs_step < self._fill_until)
+        # streak tier pushes velocity: committing to the dance gets louder hits.
+        vel_bias = 4.0 * self.streak.tier if self.cfg.game else 0.0
+        if self._abs_step < self._boost_until:
+            vel_bias += 8.0
 
         for stem in self.rack:
             stem.active = False
@@ -237,12 +296,16 @@ class Studio:
                 if gated:
                     # PHANTOM GATE: no new onsets while still/absent. Allow ONE
                     # soft sustained pad revoice at the moment stillness begins,
-                    # so it's never abruptly cut -- then nothing more.
-                    if entering_still and stem.name in ("keys", "texture"):
+                    # so it's never abruptly cut -- then nothing more. (Only for
+                    # stems the song arc has unlocked: locked means silent.)
+                    if (entering_still and stem.name in ("keys", "texture")
+                            and (not self.cfg.game
+                                 or self.arc.is_unlocked(stem.name))):
                         events = stemlib.revoice_pad(stem, self.sub, sig, beat_s)
                 elif density > 0.0:
                     events = stemlib.generate(stem, self.sub, step, steps_per_bar,
-                                              sig, beat_s, density)
+                                              sig, beat_s, density,
+                                              vel_bias=vel_bias)
                 # FILL: a guaranteed short percussion burst over the fill window.
                 if filling and stem.name == "drums" and not gated:
                     events = events + [MusicEvent("note_on", stem.channel,
@@ -259,8 +322,14 @@ class Studio:
                     self._emit(ev, self._t)
 
     def _density(self, stem, sig, step) -> float:
-        """Mapped density, modulated by the active fill/build/drop windows."""
+        """Mapped density, modulated by the song arc + active gesture windows."""
         d = float(stem.params.density)
+        if self.cfg.game:
+            # the song arc: locked stems are silent until earned; the section
+            # breathes the arrangement (intro sparse -> peak dense).
+            if not self.arc.is_unlocked(stem.name):
+                return 0.0
+            d = min(1.0, d * self.arc.density_mul(stem.name))
         a = self._abs_step + 1                     # density is decided for next step
         if stem.name in ("drums",) and a < self._fill_until:
             d = min(1.0, d + 0.4)                  # fill: extra percussion
@@ -268,6 +337,8 @@ class Studio:
             # build: rising density ramp toward the end of the window
             frac = 1.0 - (self._build_until - a) / max(self.cfg.steps_per_bar, 1)
             d = min(1.0, d + 0.5 * float(np.clip(frac, 0, 1)))
+        if a < self._boost_until:
+            d = min(1.0, d + 0.25)                 # combo payoff: denser slam
         if a < self._breakdown_until and stem.name in ("drums", "bass"):
             d = 0.0                                # breakdown: strip the bottom
         if a < self._drop_until and stem.name in ("lead", "keys", "texture"):
@@ -281,8 +352,67 @@ class Studio:
         color, big = STYLE.get(move, ((230, 230, 230), False))
         self.fx.flashes.append(Flash(move, color, t, 0.5 if big else 0.4, big))
 
+        if self.cfg.game:
+            self.streak.observe_move()
+            if self.gold.observe(move, t):
+                self._gold_hit(t)
+            combo = self.combos.observe(move, t, 60.0 / max(self.bpm, 60.0))
+            if combo is not None:
+                self._apply_combo(combo, t)
+
         for g in self.resolver.resolve_gesture(move):
             self._do_action(g, t)
+
+    # -- game payoffs --------------------------------------------------------
+
+    def _gold_hit(self, t: float) -> None:
+        """A gold-move challenge landed inside its window: PERFECT."""
+        self.fx.flashes.append(Flash("PERFECT!", GOLD_COLOR, t, 0.9, True))
+        self.streak.observe_move(big=True)
+        self.arc.bump(0.12)
+        self._build_until = max(self._build_until,
+                                self._abs_step + self.cfg.steps_per_bar)
+        self.fx.trigger("HANDS UP", t)             # the reward riser
+
+    def _apply_combo(self, combo, t: float) -> None:
+        """A recognised move sequence: a big named payoff, same every time."""
+        self.combo_log.append((t, combo.name))
+        self.fx.flashes.append(Flash(combo.name, combo.color, t, 0.9, True))
+        self.streak.observe_move(big=True)
+        self.arc.bump(0.15)
+        bar = self.cfg.steps_per_bar
+        a = self._abs_step
+        p = combo.payoff
+        if p == "supernova":                       # drop a bar, then the slam
+            self._drop_until = max(self._drop_until, a + bar)
+            self._boost_until = max(self._boost_until, a + 3 * bar)
+            self.fx.trigger("HANDS UP", t)
+        elif p == "earthquake":                    # bass an octave down, driven
+            self._quake_until = max(self._quake_until, a + 2 * bar)
+            self._fill_until = max(self._fill_until, a + bar)
+            self.fx.trigger("SQUAT", t)
+        elif p == "clap_storm":
+            self._fill_until = max(self._fill_until, a + 2 * bar)
+            self.fx.trigger("CLAP", t)
+        elif p == "wave":                          # the long rising build
+            self._build_until = max(self._build_until, a + 2 * bar)
+            self.fx.trigger("HANDS UP", t)
+        elif p == "eclipse":                       # flip light <-> dark
+            self._breakdown_until = max(self._breakdown_until, a + bar)
+            self._eclipse_flip()
+        elif p == "knockout":
+            self.fx.trigger("PUNCH", t)
+            self._fill_until = max(self._fill_until, a + bar)
+            self._boost_until = max(self._boost_until, a + 2 * bar)
+
+    def _eclipse_flip(self) -> None:
+        """Toggle between this person's home scale and the mapping's dark mood."""
+        dark = self.mapping.moods.get("dark", "phrygian")
+        to = dark if self.sub.cfg.scale != dark else self._base_scale
+        if to in SCALES:
+            self.sub.cfg.scale = to
+            self.sub._scale = SCALES[to]
+            self.mood = to
 
     def _do_action(self, g, t: float) -> None:
         action, target, params = g.action, g.target, g.params
@@ -376,7 +506,8 @@ class Studio:
                 recording=bool(stem.recording),
                 muted=not self.rack.audible(stem),
                 density=float(stem.params.density), cutoff=float(stem.params.cutoff),
-                onsets=stem.loop_onsets(), timbre=stem.timbre or stem.params.timbre))
+                onsets=stem.loop_onsets(), timbre=stem.timbre or stem.params.timbre,
+                locked=bool(self.cfg.game and not self.arc.is_unlocked(stem.name))))
         phase = "perform" if present else "attract"
         prompt = None
         if not present or sig["energy"] < self.cfg.motion_floor:
@@ -387,7 +518,26 @@ class Studio:
             energy=float(sig["energy"]), live_xyz=live, stems=stem_ui,
             playhead=int(self.master_step), loop_steps=int(self.cfg.loop_steps),
             flashes=list(self.fx.active_flashes(frame.t)), prompt=prompt,
-            mood=self.mood, beat=bool(beat))
+            mood=self.mood, beat=bool(beat), game=self._game_ui())
+
+    def _game_ui(self) -> Optional[GameUI]:
+        if not self.cfg.game:
+            return None
+        # progress through the current bar drives the challenge countdown.
+        spb = self.cfg.steps_per_bar
+        bar_frac = (max(self._abs_step, 0) % spb) / float(spb)
+        ident = self.identity
+        return GameUI(
+            section=self.arc.section, sections=list(SECTIONS),
+            heat=float(self.arc.heat), streak=float(self.streak.heat),
+            streak_tier=self.streak.tier_name,
+            challenge_move=self.gold.move, challenge_state=self.gold.state,
+            challenge_frac=(bar_frac if self.gold.state in ("announce", "window")
+                            else 0.0),
+            unlocked={s.name: self.arc.is_unlocked(s.name) for s in self.rack},
+            identity_name=ident.name if ident else "",
+            identity_tagline=ident.tagline if ident else "",
+            identity_color=ident.color if ident else (220, 220, 235))
 
 
 def _fx_move(params: dict) -> str:

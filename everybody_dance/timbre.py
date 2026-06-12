@@ -318,6 +318,37 @@ PRESETS: dict = {
         attack=0.002, decay=0.12, sustain=0.0, release=0.06,
         cutoff=4200, resonance=0.4, cutoff_env=1.5, drive=0.25, gain=0.6,
         delay_send=0.3),
+    "velvet_keys": TimbrePreset(
+        "velvet_keys", waves=[("triangle", 0.8), ("sine", 0.5)],
+        attack=0.012, decay=0.3, sustain=0.45, release=0.3,
+        cutoff=2200, resonance=0.1, cutoff_env=0.4, drive=0.15, gain=0.55,
+        reverb_send=0.3, delay_send=0.12),
+    "music_box": TimbrePreset(
+        "music_box", waves=[("sine", 0.6), ("triangle", 0.4)], voices=2,
+        detune_cents=6, attack=0.002, decay=0.5, sustain=0.0, release=0.6,
+        cutoff=6000, gain=0.5, reverb_send=0.45, delay_send=0.2),
+    "acid_bass": TimbrePreset(
+        "acid_bass", waves=[("saw", 0.9)],
+        attack=0.004, decay=0.12, sustain=0.55, release=0.06,
+        cutoff=700, resonance=0.7, cutoff_env=2.4, drive=0.55, gain=0.6),
+    "velvet_bass": TimbrePreset(
+        "velvet_bass", waves=[("sine", 0.9), ("triangle", 0.3)],
+        attack=0.006, decay=0.1, sustain=0.8, release=0.08,
+        cutoff=800, cutoff_env=0.4, drive=0.12, gain=0.9),
+    "chip_lead": TimbrePreset(
+        "chip_lead", waves=[("square", 0.7)],
+        attack=0.003, decay=0.08, sustain=0.6, release=0.05,
+        cutoff=6500, gain=0.4, delay_send=0.3),
+    "brass_stab": TimbrePreset(
+        "brass_stab", waves=[("saw", 0.7), ("square", 0.25)], voices=2,
+        detune_cents=12, attack=0.02, decay=0.2, sustain=0.5, release=0.1,
+        cutoff=3000, resonance=0.2, cutoff_env=1.2, drive=0.35, gain=0.5,
+        reverb_send=0.15),
+    "tape_pad": TimbrePreset(
+        "tape_pad", waves=[("saw", 0.35), ("triangle", 0.6)], voices=3,
+        detune_cents=14, attack=0.5, decay=0.6, sustain=0.65, release=0.8,
+        cutoff=1700, resonance=0.15, cutoff_env=0.5, noise=0.02, gain=0.4,
+        reverb_send=0.55, delay_send=0.15),
     "analog_kick": TimbrePreset(
         "analog_kick", percussive=True, drum_kind="kick", gain=0.95),
     "noise_hat": TimbrePreset(

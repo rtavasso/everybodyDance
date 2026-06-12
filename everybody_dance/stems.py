@@ -161,11 +161,13 @@ def _velocity(base: float, energy: float, weight: float, accent: float = 0.0
 
 
 def generate(stem: Stem, sub: Substrate, step: int, steps_per_bar: int,
-             sig: dict, beat_s: float, density: float) -> List[MusicEvent]:
+             sig: dict, beat_s: float, density: float,
+             vel_bias: float = 0.0) -> List[MusicEvent]:
     """Body -> this stem's note_on events for one grid step (deterministic).
 
     ``density`` is the (already modulated) 0..1 placement density; ``sig`` is
-    the studio signal dict (mapping keys). No RNG -- euclidean placement plus
+    the studio signal dict (mapping keys); ``vel_bias`` is an additive velocity
+    push (streak / combo payoff). No RNG -- euclidean placement plus
     scale-snapped pitch keep it replay-identical.
     """
     p = stem.params
@@ -180,12 +182,12 @@ def generate(stem: Stem, sub: Substrate, step: int, steps_per_bar: int,
         hat = sub.pattern("drums", min(1.0, 0.2 + density))
         if kick[bar_step]:
             out.append(MusicEvent("note_on", stem.channel, DRUM_PIECE["kick"],
-                                  _velocity(55, energy, weight), dur=DUR["drums"],
-                                  tag="drums"))
+                                  _velocity(55 + vel_bias, energy, weight),
+                                  dur=DUR["drums"], tag="drums"))
         if hat[bar_step] and bar_step % 2 == 0:
             out.append(MusicEvent("note_on", stem.channel, DRUM_PIECE["hat"],
-                                  _velocity(35, energy, weight), dur=DUR["drums"],
-                                  tag="drums"))
+                                  _velocity(35 + vel_bias, energy, weight),
+                                  dur=DUR["drums"], tag="drums"))
         return out
 
     pat = sub.pattern(stem.role.name, density)
@@ -199,8 +201,8 @@ def generate(stem: Stem, sub: Substrate, step: int, steps_per_bar: int,
                                stem.role.lo, stem.role.hi)
     dur = DUR[stem.name] * (0.6 + 0.8 * flow if stem.name == "lead" else 1.0)
     out.append(MusicEvent("note_on", stem.channel, note,
-                          _velocity(48, energy, weight), dur=beat_s_to_dur(dur, beat_s),
-                          tag=stem.name))
+                          _velocity(48 + vel_bias, energy, weight),
+                          dur=beat_s_to_dur(dur, beat_s), tag=stem.name))
     return out
 
 
@@ -217,9 +219,11 @@ def revoice_pad(stem: Stem, sub: Substrate, sig: dict, beat_s: float
     weight = float(np.clip(sig.get("weight", 0.3), 0, 1))
     spread = 0.3 + 0.7 * openness
     base_oct = int(round(float(np.clip(sig.get("com_height", 0.5), 0, 1))))
+    # an open body earns the richer 7th-chord voicing
+    tones = sub.chord_tones(extended=openness > 0.6)
     notes = sorted({sub.fold_into_range(
         sub.degree_to_midi(d, octave=base_oct + int(k * spread)),
-        stem.role.lo, stem.role.hi) for k, d in enumerate(sub.chord_tones())})
+        stem.role.lo, stem.role.hi) for k, d in enumerate(tones)})
     vel = int(np.clip(28 + 40 * weight, 1, 90))
     return [MusicEvent("note_on", stem.channel, n, vel,
                        dur=DUR[stem.name], tag=stem.name) for n in notes]

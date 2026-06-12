@@ -26,6 +26,7 @@ SCALES: Dict[str, List[int]] = {
     "major": [0, 2, 4, 5, 7, 9, 11],
     "minor": [0, 2, 3, 5, 7, 8, 10],
     "dorian": [0, 2, 3, 5, 7, 9, 10],
+    "mixolydian": [0, 2, 4, 5, 7, 9, 10],
     "minor_pentatonic": [0, 3, 5, 7, 10],
     "major_pentatonic": [0, 2, 4, 7, 9],
     "lydian": [0, 2, 4, 6, 7, 9, 11],
@@ -35,6 +36,20 @@ SCALES: Dict[str, List[int]] = {
 # A gentle, mostly-diatonic harmonic field: scale-degree roots (0-based) that
 # the field drifts across at phrase rate. Indices into the active scale.
 DEFAULT_FIELD = [0, 5, 3, 4]  # i - vi - iv - v flavour in minor
+
+# Curated chord progressions per scale: 0-based scale-degree roots the harmonic
+# field cycles through. Every option is a known-good loop in its mode, so any
+# identity pick sounds intentional rather than random.
+PROGRESSIONS: Dict[str, List[List[int]]] = {
+    "major": [[0, 4, 5, 3], [0, 5, 3, 4], [0, 3, 4, 0]],
+    "minor": [[0, 5, 2, 6], [0, 3, 5, 4], [0, 6, 5, 4]],
+    "dorian": [[0, 3, 0, 4], [0, 1, 3, 4], [0, 3, 6, 4]],
+    "mixolydian": [[0, 6, 3, 0], [0, 3, 6, 4], [0, 6, 0, 4]],
+    "lydian": [[0, 1, 0, 4], [0, 4, 1, 0], [0, 2, 1, 0]],
+    "phrygian": [[0, 1, 0, 6], [0, 1, 3, 1], [0, 6, 1, 0]],
+    "major_pentatonic": [[0, 3, 4, 0], [0, 2, 3, 0]],
+    "minor_pentatonic": [[0, 3, 4, 0], [0, 2, 4, 3]],
+}
 
 
 def euclidean(pulses: int, steps: int) -> List[int]:
@@ -106,10 +121,14 @@ class Substrate:
     def chord_root_degree(self) -> int:
         return self.cfg.harmonic_field[self._field_idx]
 
-    def chord_tones(self) -> List[int]:
-        """Triad (1-3-5) built on the current field root, as scale degrees."""
+    def chord_tones(self, extended: bool = False) -> List[int]:
+        """Triad (1-3-5) built on the current field root, as scale degrees;
+        ``extended`` adds the 7th for a richer pad voicing (still in scale)."""
         root = self.chord_root_degree
-        return [root, root + 2, root + 4]
+        tones = [root, root + 2, root + 4]
+        if extended:
+            tones.append(root + 6)
+        return tones
 
     def scale_size(self) -> int:
         return len(self._scale)

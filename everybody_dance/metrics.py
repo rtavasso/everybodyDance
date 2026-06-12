@@ -56,14 +56,31 @@ def coupling(move: Dict[str, np.ndarray], music: Dict[str, np.ndarray]) -> Dict:
             "phantom": round(phantom, 3)}
 
 
-def musicality(events, tonic: int, scale: str, minutes: float) -> Dict:
+def musicality(events, tonic: int, scale: str, minutes: float,
+               segments: Optional[List[Tuple[float, int, str]]] = None) -> Dict:
+    """``segments`` optionally gives the (t_start, tonic, scale) timeline when
+    the key changed mid-session (scale_shift / ECLIPSE): each note is then
+    judged against the scale that was active at its onset, which is the honest
+    version of in-scale% for a session with deliberate key changes."""
     ons = [e for e in events if e.kind == "note_on"]
     pitched = [e for e in ons if e.channel != 10]
     if not ons:
         return {"notes": 0, "in_scale_pct": 0.0, "notes_per_min": 0.0,
                 "distinct_pitches": 0, "dyn_range": 0, "mean_velocity": 0.0}
-    deg = set(SCALES[scale])
-    in_scale = sum((e.a - tonic) % 12 in deg for e in pitched)
+
+    def key_at(t: float) -> Tuple[int, set]:
+        tn, deg = tonic, set(SCALES[scale])
+        for ts, stn, ssc in (segments or []):
+            if ts <= t + 1e-9:
+                tn, deg = stn, set(SCALES[ssc])
+            else:
+                break
+        return tn, deg
+
+    in_scale = 0
+    for e in pitched:
+        tn, deg = key_at(e.t)
+        in_scale += (e.a - tn) % 12 in deg
     vels = [e.b for e in ons]
     return {
         "notes": len(ons),
@@ -143,6 +160,8 @@ def gesture_spam(fired: List[Tuple[float, str]], dur: float) -> Dict:
 
 
 # default exhibit SLOs -> CI pass/fail. Operators: >=, <=, >, <.
+# (check_slo skips keys a harness doesn't emit, so the game.* SLOs only gate
+# the Studio bundle -- the legacy ambient-engine grade has no game layer.)
 SLO = {
     "coupling.score": (">=", 0.35),
     "coupling.dead_zone": ("<=", 0.25),
@@ -151,6 +170,9 @@ SLO = {
     "liveliness.density_std": (">", 0.0),       # G2: the arrangement varies over time
     "gesture.max_per_min": ("<=", 20.0),        # G4: no single move spams
     "timing.headroom_pct": (">=", 0.0),
+    "game.sections_visited": (">=", 3.0),       # the song arc actually travels
+    "game.stems_unlocked": (">=", 5.0),         # the full band gets earned
+    "game.combos_fired": (">=", 1.0),           # combos are reachable + fire
 }
 
 _OPS = {">=": lambda v, t: v >= t, "<=": lambda v, t: v <= t,

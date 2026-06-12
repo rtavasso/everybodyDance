@@ -336,6 +336,59 @@ voices); a real-visitor `.session` corpus (KICKOFF §9); render_studio `--script
 precision (0.71) is looser than grade's (0.91) — grade remains the recognition
 authority.
 
+## Entry 11 — the Arcade update (game layer + Dance DNA + the sound upgrade)
+Direction from the owner: make it FEEL LIKE A GAME (Just Dance), make each
+person's output feel unique to them, and make it sound good. Three new layers
+on the Studio, all deterministic, all wired into the gradable harness:
+
+- **game.py — the game layer.** (1) COMBOS: named move sequences in beat
+  windows fire big repeatable payoffs (SQUAT→JUMP = SUPERNOVA drop-slam,
+  STOMP×2 = EARTHQUAKE octave-down bass, CLAP×3 = CLAP STORM, RAISE L→R→HANDS
+  UP = THE WAVE, T-POSE→ARMS CROSSED = ECLIPSE light/dark flip, PUNCH×3 =
+  KNOCKOUT); longest match wins, history clears on fire. (2) STREAK: moves heat
+  a meter (WARM/FIRE/GOLD) that decays in stillness; tier pushes note velocity
+  and the arc. (3) SONG ARC: heat-driven sections (intro→groove→build→peak)
+  that UNLOCK stems as they're earned — the song starts drums+bass and grows
+  into the full band; unlocks are sticky (never punish), transitions land on
+  bar lines, every unlock is announced on the stage. (4) GOLD MOVES: every 8
+  bars a specific move is announced, then a 1-bar timed window; hit = PERFECT
+  payoff. Doubles as the zero-instruction tutorial.
+- **identity.py — Dance DNA.** The calibration signature deterministically
+  picks a whole sonic world: root note, mode, chord progression
+  (substrate.PROGRESSIONS, curated per scale), synth kit (5 curated ensembles
+  over 7 new presets), accent colour, and a generated stage name (adjective
+  reflects the movement palette, so "WILD COMET" is *earned*). Coarse choices
+  are legible (soft/open → ambient lydian high; hard/sharp → rhythmic phrygian
+  low); fine choices CRC the signature decimals so similar movers still split.
+  Same calibration → byte-identical identity.
+- **the sound upgrade.** render_studio's WAV is now STEREO (constant-power
+  per-stem placement + live pan automation), kick-SIDECHAINED (the classic
+  pump; pitched bus ducks 0.45 on every kick), one send/return FX pass, and a
+  MASTER BUS (block-RMS compressor + tanh soft limit). Verified: L/R corr 0.62,
+  RMS arc 0.07→0.24→0 (stillness)→0.26, crest 5.4. Pads voice the 7th when the
+  body is open. LIVE audio: RealtimeSynth can now route stem tags to the rich
+  timbre presets (cached on quantised note keys, so each costs synthesis once)
+  — the live band finally sounds like the offline render; studio_live syncs
+  presets from automation so timbre_morph is audible live.
+- **stage.py** draws the new state: section tracker + streak meter (top
+  centre), the gold-move challenge card (announce/NOW! + draining bar), the
+  Dance-DNA identity card (bottom left), locked lanes ("LOCKED — keep
+  dancing"), and unlock/combo/PERFECT toasts ride the existing flash pipeline.
+- **provable.** metrics gains `game.*` SLOs (sections_visited ≥ 3,
+  stems_unlocked ≥ 5, combos_fired ≥ 1) + segment-aware in-scale% (notes judged
+  against the scale active at their onset — honest under ECLIPSE/scale_shift).
+  The corpus choreography now fires a CLAP STORM, an EARTHQUAKE, and a JUMP
+  timed into the first gold window. Default 32 s bundle: ALL TEN SLOs pass
+  (coupling 0.59, phantom 0.0, in-scale 100 %, 4 sections, 5 stems, 2 combos,
+  1 gold hit, 8 distinct timbres). Determinism holds end to end.
+- 147/147 tests (was 124; +test_game.py, +test_identity.py). The KICKOFF
+  "not a game" non-goal is superseded by the owner's direction — there is
+  still no scoring/judgement of the *person*, only payoffs; misses are silent.
+
+Open: live feel of unlock pacing + gold windows needs a real webcam session
+(can't run cameras here); first render of a long pad live costs ~tens of ms
+before its cache entry exists (pre-warm if it ever audibly hiccups).
+
 ## Log
 (newest at bottom)
 

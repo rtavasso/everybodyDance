@@ -24,6 +24,14 @@ The whole bet rides on three felt qualities, in order:
 This is *not* a game (no "match the dance"), *not* a social/UGC product, and *not*
 a cloud service. It is one screen, one camera, one speaker system, one room.
 
+> **Direction update (owner, 2026-06):** the "not a game" framing is relaxed —
+> the piece should *feel like a game* (Just Dance is the explicit reference):
+> combos, streaks, a song arc with earned stem unlocks, and timed "gold move"
+> challenges (see `everybody_dance/game.py`). The line that stays: the system
+> never scores or judges the *person* — only payoffs, never punishment; missed
+> challenges are silent and unlocks are sticky. Per-visitor uniqueness is now a
+> first-class goal (`identity.py`, "Dance DNA").
+
 ## 2. Why this is hard (the problems)
 
 - **P1 — Legible causation.** Generative music easily sounds good *without*

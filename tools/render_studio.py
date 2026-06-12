@@ -38,6 +38,7 @@ from everybody_dance import stems as stemlib
 from everybody_dance import timbre as T
 from everybody_dance.effects import Flash
 from everybody_dance.features import FeatureExtractor
+from everybody_dance.gestures import GESTURE_LIBRARY
 from everybody_dance.judge import build_prompt, grade_bundle
 from everybody_dance.mapping import GestureBinding, MappingConfig
 from everybody_dance.output import LogBackend
@@ -112,20 +113,27 @@ def command_choreography(fps: float, seconds: float) -> Dict[int, List[str]]:
     """Deterministic gesture injection keyed to the corpus phases (no RNG),
     demonstrating the gesture->action features end to end and keeping it
     musical: a fill, a bass loop (arm->lock), a lead timbre morph, a dark scale
-    shift -- all before the stillness window -- then a breakdown, a drop, and a
-    build during recovery. Times scale with the layout so they always land in
-    their intended phase."""
+    shift -- all before the stillness window -- then a breakdown, an EARTHQUAKE
+    combo (STOMP x2), and a build during recovery. Also exercises the game
+    layer: a CLAP x3 CLAP STORM combo mid-change, and a JUMP timed to land in
+    the first gold-move window (bar 5 at the entrained ~120 BPM). Times scale
+    with the layout so they always land in their intended phase."""
     L = corpus_layout(seconds)
     g, ss, se = L["groove"], L["still_start"], L["still_end"]
     raw: List[Tuple[float, List[str]]] = [
         (0.40 * g, ["JUMP"]),             # fill: a guaranteed drum burst
         (0.80 * g, ["SQUAT"]),            # loop_record bass: arm
         (g + 0.20 * L["change"], ["RAISE RIGHT"]),   # timbre_morph lead -> glass_pad
+        (g + 0.25 * L["change"], ["JUMP"]),          # aimed at gold window (bar 5)
         (g + 0.40 * L["change"], ["SQUAT"]),         # loop_record bass: lock loop
-        (g + 0.65 * L["change"], ["ARMS CROSSED"]),  # scale_shift -> dark
+        (g + 0.55 * L["change"], ["CLAP"]),          # CLAP x3 -> CLAP STORM combo
+        (g + 0.62 * L["change"], ["CLAP"]),
+        (g + 0.69 * L["change"], ["CLAP"]),
+        (g + 0.80 * L["change"], ["ARMS CROSSED"]),  # scale_shift -> dark
         (ss - 0.6, ["PUNCH"]),            # loop_clear bass before the stillness
         (se + 0.20 * L["recover"], ["T-POSE"]),      # breakdown after stillness
-        (se + 0.45 * L["recover"], ["STOMP"]),       # the drop
+        (se + 0.45 * L["recover"], ["STOMP"]),       # STOMP x2 -> EARTHQUAKE
+        (se + 0.45 * L["recover"] + 0.4, ["STOMP"]),
         (se + 0.70 * L["recover"], ["HANDS UP"]),    # build / riser
     ]
     out: Dict[int, List[str]] = {}
@@ -182,6 +190,10 @@ def replay(xyz: np.ndarray, fps: float, flip: bool, *, scripted: bool,
     fired: List[Tuple[float, str]] = []
     proc_ms: List[float] = []
     mv = {k: [] for k in ("energy", "core", "limb", "open", "comh")}
+    # the active (tonic, scale) over time -- scale_shift / ECLIPSE move it, and
+    # the in-scale metric judges each note against the scale active at its t.
+    segments: List[Tuple[float, int, str]] = [
+        (0.0, studio.sub.cfg.tonic, studio.sub.cfg.scale)]
 
     for i, fr in enumerate(frames):
         cmds = list(commands_at.get(i, []))
@@ -196,20 +208,25 @@ def replay(xyz: np.ndarray, fps: float, flip: bool, *, scripted: bool,
         mv["open"].append(f.openness)
         mv["comh"].append(f.com_height)
 
+        if (studio.sub.cfg.tonic, studio.sub.cfg.scale) != segments[-1][1:]:
+            segments.append((fr.t, studio.sub.cfg.tonic, studio.sub.cfg.scale))
+
         autom_timeline.append((fr.t, out.automation))
         per_frame.append((out.ui.live_xyz, [Flash(fl.name, fl.color, fl.t0,
                                                   fl.ttl, fl.big)
                                             for fl in out.ui.flashes]))
         # Record every recognised/forced move that flashed this frame (those
-        # newly-added flashes whose t0 == this frame's t).
+        # newly-added flashes whose t0 == this frame's t). Game flashes (combo
+        # names, PERFECT!, unlock toasts) are not moves -- keep them out of the
+        # recognition/spam metrics.
         for fl in out.ui.flashes:
-            if abs(fl.t0 - fr.t) < 1e-9:
+            if abs(fl.t0 - fr.t) < 1e-9 and fl.name in GESTURE_LIBRARY:
                 fired.append((fr.t, fl.name))
     studio.panic()
 
     return dict(studio=studio, events=list(be.events), fired=fired,
                 per_frame=per_frame, proc_ms=proc_ms, mv=mv, fps=fps, dur=dur,
-                autom=autom_timeline, sub=studio.sub)
+                autom=autom_timeline, sub=studio.sub, segments=segments)
 
 
 # -- timbre-aware WAV render ------------------------------------------------
@@ -238,17 +255,68 @@ def _preset_for(ev, stem_snap: dict) -> str:
     return CH_PRESET.get(ev.channel, "warm_keys")
 
 
+# Fixed per-stem stereo placement layered onto the live pan automation, so the
+# mix has width even when the dancer stands centred. Drums/bass stay anchored.
+STEM_SPREAD = {"drums": 0.0, "bass": 0.0, "keys": -0.18, "lead": 0.22,
+               "texture": 0.30, "fx": 0.12}
+
+
+def _sidechain(pitched: np.ndarray, kick_times: List[float], sr: int,
+               depth: float = 0.45, release_s: float = 0.25) -> np.ndarray:
+    """Classic pump: duck the pitched bus on every kick, recovering over
+    `release_s`. Deterministic, and the single biggest 'sounds produced' win --
+    the kick gets pocket and the low-mids stop fighting it."""
+    env = np.ones(pitched.shape[0])
+    n_rel = int(release_s * sr)
+    if n_rel <= 0 or not kick_times:
+        return pitched
+    tau = np.arange(n_rel) / sr
+    curve = 1.0 - depth * np.exp(-tau / (release_s / 3.0))
+    for tk in kick_times:
+        i0 = int(tk * sr)
+        i1 = min(i0 + n_rel, env.shape[0])
+        if 0 <= i0 < env.shape[0]:
+            env[i0:i1] = np.minimum(env[i0:i1], curve[: i1 - i0])
+    return pitched * env[:, None]
+
+
+def _master_bus(x: np.ndarray, sr: int, thr: float = 0.35, ratio: float = 3.0,
+                block: int = 1024) -> np.ndarray:
+    """A gentle block-RMS bus compressor (fast attack, slow release) plus a
+    tanh soft limiter: glues the stems and tames combo-slam peaks without
+    audible distortion. Deterministic (block arithmetic only)."""
+    n = x.shape[0]
+    nb = max((n + block - 1) // block, 1)
+    mono = np.abs(x).max(axis=1)
+    rms = np.sqrt(np.mean(
+        np.pad(mono, (0, nb * block - n)).reshape(nb, block) ** 2, axis=1))
+    gain_b = np.ones(nb)
+    over = rms > thr
+    gain_b[over] = (thr / rms[over]) ** (1.0 - 1.0 / ratio)
+    g, sm = 1.0, np.empty(nb)
+    for i in range(nb):                       # ~46 ms blocks: tiny loop
+        a = 0.6 if gain_b[i] < g else 0.12    # attack down fast, release up slow
+        g += a * (gain_b[i] - g)
+        sm[i] = g
+    gain = np.repeat(sm, block)[:n]
+    y = x * gain[:, None]
+    return np.tanh(y * 1.25) / np.tanh(1.25)
+
+
 def render_wav(events: List, autom_timeline: List[Tuple[float, dict]],
                out_path: Optional[str], dur: float, tail: float = 1.5
                ) -> np.ndarray:
     """Sum every note_on (its timbre + the per-stem automation at its time) into
-    one mono mix, apply ONE global reverb/delay pass (a representative of the
-    stems' automation), normalise, and (if out_path) write a mono int16 WAV.
-    Returns the float mix so callers/tests can inspect it without writing PNGs."""
+    a STEREO mix -- constant-power panned per stem, kick-sidechained, one global
+    reverb/delay send, then a master bus (compressor + soft limit) -- and (if
+    out_path) write a stereo int16 WAV. Returns the float (n, 2) mix so
+    callers/tests can inspect it without writing files."""
     ons = [e for e in events if e.kind == "note_on"]
     end = (max((e.t for e in ons), default=0.0) + tail) if ons else max(dur, 1.0)
     n_total = int(end * SR) + SR
-    mix = np.zeros(n_total, dtype=np.float64)
+    drums = np.zeros((n_total, 2), dtype=np.float64)
+    pitched = np.zeros((n_total, 2), dtype=np.float64)
+    kick_times: List[float] = []
 
     for ev in ons:
         snap = _autom_at(autom_timeline, ev.t)
@@ -264,24 +332,39 @@ def render_wav(events: List, autom_timeline: List[Tuple[float, dict]],
         buf = buf.astype(np.float64) * (0.3 + 0.7 * gain01)
         i0 = int(ev.t * SR)
         i1 = i0 + len(buf)
-        if i1 <= n_total:
-            mix[i0:i1] += buf
+        if i1 > n_total:
+            continue
+        # constant-power pan: live automation + the stem's fixed spread.
+        pan = float(np.clip(float(a.get("pan", 0.0))
+                            + STEM_SPREAD.get(ev.tag, 0.0), -1.0, 1.0))
+        th = (pan + 1.0) * np.pi / 4.0
+        bus = drums if ev.channel == 10 else pitched
+        bus[i0:i1, 0] += buf * np.cos(th)
+        bus[i0:i1, 1] += buf * np.sin(th)
+        if ev.channel == 10 and ev.a == stemlib.DRUM_PIECE["kick"]:
+            kick_times.append(ev.t)
 
-    # ONE global FX pass: a representative (median) of the stems' send automation.
+    pitched = _sidechain(pitched, kick_times, SR)
+
+    # ONE global FX send (median of the stems' automation), computed on the
+    # mono sum and returned equally to both channels -- a classic send/return.
     revs = [a.get("reverb", 0.0) for _, snap in autom_timeline
             for a in snap.values()]
     dels = [a.get("delay", 0.0) for _, snap in autom_timeline
             for a in snap.values()]
     R = float(np.clip(np.median(revs), 0.0, 0.6)) if revs else 0.0
     D = float(np.clip(np.median(dels), 0.0, 0.5)) if dels else 0.0
-    mixed = T.FXRack().process(mix, reverb=R, delay=D, drive=0.0, bitcrush=0.0)
+    mono = pitched.mean(axis=1)
+    wet = T.FXRack().process(mono, reverb=R, delay=D).astype(np.float64) - mono
+    mix = drums + pitched + wet[:, None]
 
+    mixed = _master_bus(mix, SR)
     peak = float(np.max(np.abs(mixed))) + 1e-9
     out = (mixed / peak * 0.95).astype(np.float32)
     if out_path is not None:
         pcm = (out * 32767).astype(np.int16)
         with wave.open(out_path, "w") as w:
-            w.setnchannels(1)
+            w.setnchannels(2)
             w.setsampwidth(2)
             w.setframerate(SR)
             w.writeframes(pcm.tobytes())
@@ -407,13 +490,32 @@ def compute_metrics(r, labels) -> dict:
             continue
         used_timbres.add(_preset_for(e, _autom_at(autom, e.t)))
 
+    st = r["studio"]
+    game = {
+        "sections_visited": len(st.arc.sections_visited),
+        "sections": list(st.arc.sections_visited),
+        "stems_unlocked": len(st.arc.unlocked),
+        "combos_fired": len(st.combo_log),
+        "combos": [name for _, name in st.combo_log],
+        "max_streak_tier": int(st.max_streak_tier),
+        "gold_prompts": int(st.gold.prompts),
+        "gold_hits": int(st.gold.hits),
+    }
+    if st.identity is not None:
+        game["identity"] = {"name": st.identity.name, "root": st.identity.root_name,
+                            "scale": st.identity.scale,
+                            "kit": st.identity.kit_name,
+                            "progression": list(st.identity.progression)}
+
     return {
         "coupling": M.coupling(move, music),
-        "musicality": M.musicality(events, sub.cfg.tonic, sub.cfg.scale, dur / 60),
+        "musicality": M.musicality(events, sub.cfg.tonic, sub.cfg.scale, dur / 60,
+                                   segments=r.get("segments")),
         "liveliness": M.liveliness(events, dur),
         "recognition": M.recognition(r["fired"], labels),
         "gesture": M.gesture_spam(r["fired"], dur),
         "timing": M.timing(r["proc_ms"], fps),
+        "game": game,
         "stems": {"per_stem_onsets": per_stem,
                   "active_stems": int(sum(1 for v in per_stem.values() if v > 0)),
                   "distinct_timbres": int(len(used_timbres)),
@@ -426,7 +528,7 @@ def compute_metrics(r, labels) -> dict:
 
 
 def flatten(metrics) -> dict:
-    return {
+    out = {
         "coupling.score": metrics["coupling"]["score"],
         "coupling.dead_zone": metrics["coupling"]["dead_zone"],
         "coupling.phantom": metrics["coupling"]["phantom"],
@@ -435,6 +537,11 @@ def flatten(metrics) -> dict:
         "gesture.max_per_min": metrics["gesture"]["max_per_min"],
         "timing.headroom_pct": metrics["timing"].get("headroom_pct", 0.0),
     }
+    if "game" in metrics:
+        out["game.sections_visited"] = float(metrics["game"]["sections_visited"])
+        out["game.stems_unlocked"] = float(metrics["game"]["stems_unlocked"])
+        out["game.combos_fired"] = float(metrics["game"]["combos_fired"])
+    return out
 
 
 # -- top-level pipeline (factored so the test can skip PNG writes) ----------

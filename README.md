@@ -214,6 +214,45 @@ uv run python run.py --mode studio --source webcam --backend midi --coupling 0.4
 uv run python -m tools.render_studio               # --scripted  --judge  --seconds 24
 ```
 
+### The Arcade: combos, streaks, the song arc, gold moves, Dance DNA
+
+The Studio plays like a game (Just Dance is the explicit reference), without
+ever scoring the *person* — only payoffs, never punishment:
+
+- **Dance DNA** (`identity.py`) — your ~12 s calibration deterministically
+  picks *your* sonic world: root note, mode, chord progression, synth kit,
+  accent colour, and a generated stage name ("WILD COMET — C# phrygian ·
+  circuit kit"). Soft, open movers land in bright, airy, high worlds; hard,
+  sharp movers in dark, driven, low ones — and the fine decimals of your
+  signature split even similar movers into different keys, chords and kits.
+  Same body, same dance → the same identity, every visit. No two visitors
+  stand in front of the same instrument.
+- **The song arc** (`game.py`) — the band starts as drums + bass and you *earn*
+  the rest: dancing heats a meter that advances intro → groove → build → peak
+  on bar lines, unlocking keys, then lead, then texture ("KEYS UNLOCKED"
+  flashes; locked lanes read *LOCKED — keep dancing*). Unlocks are sticky;
+  cooling off softens the arrangement but never takes an instrument away.
+- **Combos** — move *sequences* inside a beat window fire payoffs bigger than
+  any single move: `SQUAT → JUMP` = **SUPERNOVA** (a one-bar drop into a
+  doubled-density slam), `STOMP ×2` = **EARTHQUAKE** (bass drops an octave,
+  driven), `CLAP ×3` = **CLAP STORM**, `RAISE L → RAISE R → HANDS UP` =
+  **THE WAVE**, `T-POSE → ARMS CROSSED` = **ECLIPSE** (light/dark scale flip),
+  `PUNCH ×3` = **KNOCKOUT**. Deterministic: same combo, same payoff, every time.
+- **Streak** — recognised moves heat a WARM / FIRE / GOLD meter that decays in
+  stillness; higher tiers push velocity and the arc. Commit to the dance and
+  the band audibly commits back.
+- **Gold moves** — every 8 bars the screen announces a move, then opens a
+  one-bar timed window: hit it for a **PERFECT!** riser + build. Misses are
+  silent. This is also the zero-instruction tutorial — the screen teaches the
+  vocabulary one move at a time.
+
+**And it sounds produced.** The renders are stereo (constant-power per-stem
+placement + live pan), the pitched bus is **sidechain-ducked by the kick** (the
+classic pump), one global send/return FX pass, and a master bus (block-RMS
+compressor + soft limiter) glues it. Pads voice the 7th when your body opens.
+The **live** synth routes each stem to the same rich timbre presets (cached per
+note), so the gallery instrument sounds like the offline render.
+
 **Customizable everything.** A declarative `MappingConfig` (JSON) binds movement
 signals and gestures to per-stem targets and discrete actions — edit it and the
 instrument changes (`tools.studio_live --mapping my_map.json`):
@@ -234,18 +273,24 @@ the synthetic corpus: ~12 onsets/s in motion → **0 onsets/s during stillness**
 
 **Provable.** `tools/render_studio.py` replays a synthetic dancer deterministically
 and emits a gradable bundle — a multi-stem piano-roll, a contact sheet of
-move-flashes, `metrics.json` + SLO, and a **timbre-rendered `music.wav`**. The
-default bundle: coupling ≈ 0.59, phantom 0.0, in-scale 100 %, all five stems
-active, six distinct timbres — **all seven SLOs pass**. Same dance + same moves →
-byte-identical events and audio (determinism is preserved end to end).
+move-flashes, `metrics.json` + SLO, and a **timbre-rendered stereo `music.wav`**.
+The default bundle: coupling ≈ 0.59, phantom 0.0, in-scale 100 % (judged against
+the scale active at each note — honest under ECLIPSE/scale shifts), all four
+sections visited, all five stems unlocked and active, two combos + a gold-move
+PERFECT fired, eight distinct timbres — **all ten SLOs pass** (the seven
+originals plus `game.sections_visited`, `game.stems_unlocked`,
+`game.combos_fired`). Same dance + same moves → byte-identical events and audio
+(determinism is preserved end to end).
 
 The gallery screen (`stage.py`, drawn live by `tools/studio_live.py` and offline
 for grading) shows a mood-coloured glowing dancer with motion trails + beat
 particles, a per-stem band (VU, loop-onset rings, REC/LOOP/MUTE badges, the
-current timbre), Just-Dance "gold-move" gesture cards with onboarding prompts, and
-a self-animating attract loop for the empty room.
+current timbre, locked-lane states), the section tracker + streak meter, the
+gold-move challenge card, your Dance-DNA identity card, Just-Dance "gold-move"
+gesture cards with onboarding prompts, and a self-animating attract loop for
+the empty room.
 
-Modules: `everybody_dance/{studio,stems,timbre,mapping,stage}.py`,
+Modules: `everybody_dance/{studio,stems,timbre,mapping,stage,game,identity}.py`,
 `tools/{render_studio,studio_live}.py`. Corpus + checks: [`docs/CORPUS.md`](docs/CORPUS.md).
 
 ## Song-builder (dance continuously, the song builds itself)
